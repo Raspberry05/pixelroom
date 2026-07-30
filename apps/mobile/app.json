@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Pixelroom",
+    "slug": "pixelroom",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "pixelroom",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.pixelroom.mobile"
+    },
+    "android": {
+      "package": "app.pixelroom.mobile"
+    }
+  }
+}
