@@ -243,6 +243,7 @@ export function RoomScreen({
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingSentRef = useRef(false);
   const [visibleUserKeys, setVisibleUserKeys] = useState<string[]>([]);
+  const [bodyVisibleUserKeys, setBodyVisibleUserKeys] = useState<string[]>([]);
   const [hudNow, setHudNow] = useState(() => Date.now());
   const coinsRef = useRef(coins);
   coinsRef.current = coins;
@@ -469,6 +470,11 @@ export function RoomScreen({
   const savedLabel =
     savedAt == null ? "…" : `Saved ${new Date(savedAt).toLocaleTimeString()}`;
 
+  const bodyVisibleSet = useMemo(
+    () => new Set(bodyVisibleUserKeys),
+    [bodyVisibleUserKeys],
+  );
+
   function trySendAction(action: ActionKind, targetName?: string | null) {
     // Handle cleaning action specially - trigger mini-game instead of animation
     if (action === "clean") {
@@ -541,6 +547,38 @@ export function RoomScreen({
       setStatus(actionUnlockHint(action) ?? `Need furniture for *${action}`);
       return;
     }
+
+    // Social: only walk over when the target is on your screen. Never teleport
+    // to someone off-camera; their client walks to you when they can see you.
+    const chip = ACTION_CHIPS.find((c) => c.action === action);
+    if (chip?.needsTarget && targetName && onMoveSelf) {
+      const targetActor = actors.find(
+        (a) =>
+          !a.isSelf &&
+          a.name.toLowerCase() === targetName.trim().toLowerCase(),
+      );
+      if (targetActor && bodyVisibleSet.has(targetActor.userKey)) {
+        const selfActor = actors.find((a) => a.isSelf);
+        const selfMember = selfActor
+          ? room.memberState[String(selfActor.characterId)]
+          : null;
+        const targetMember =
+          room.memberState[String(targetActor.characterId)] ?? null;
+        if (selfMember && targetMember) {
+          const gap = targetMember.position.x - selfMember.position.x;
+          if (Math.abs(gap) > 1.15) {
+            const side = gap >= 0 ? -1 : 1;
+            onMoveSelf(targetMember.position.x + side * 1.1);
+          }
+        }
+      } else if (targetActor && !bodyVisibleSet.has(targetActor.userKey)) {
+        setStatus(`${targetActor.name} isn’t on your screen`);
+        setTimeout(() => setStatus(null), 2200);
+        onSendAction(action, targetName);
+        return;
+      }
+    }
+
     setStatus(null);
     onSendAction(action, targetName);
   }
@@ -762,6 +800,7 @@ export function RoomScreen({
           expandCost={ROOM_EXPAND_COST}
           onViewportCenterX={onMoveSelf}
           onVisibleUserKeys={setVisibleUserKeys}
+          onBodyVisibleUserKeys={setBodyVisibleUserKeys}
           dirtLevel={currentDirtLevel}
           furnitureCare={furnitureCare}
         />
@@ -805,7 +844,6 @@ export function RoomScreen({
                         styles.hudText,
                         isAction && styles.hudTextAction,
                       ]}
-                      numberOfLines={2}
                     >
                       {line.text}
                     </Text>
@@ -1055,7 +1093,7 @@ const styles = StyleSheet.create({
     zIndex: 5,
     elevation: 5,
     gap: 6,
-    maxHeight: 140,
+    maxHeight: 280,
   },
   hudBubbleRow: {
     width: "100%",

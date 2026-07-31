@@ -468,7 +468,11 @@ function appendMessage(line: ChatLine) {
       continue;
     }
     // Recipients elsewhere (hallway, another room) → notify only this conversation.
-    send(ws, { type: "chat_notify", message: line });
+    send(ws, {
+      type: "chat_notify",
+      message: line,
+      memberKeys,
+    });
   }
 }
 
@@ -967,7 +971,7 @@ setInterval(() => {
     const active = Object.values(room.memberState).some((m) => m.presence === "active");
     if (!active) continue;
     const skipWanderIds = Object.values(room.memberState)
-      .filter((m) => now - (manualMoveAt.get(String(m.characterId)) ?? 0) < 2800)
+      .filter((m) => now - (manualMoveAt.get(String(m.characterId)) ?? 0) < 1200)
       .map((m) => m.characterId);
     const result = tickRoom(room, {
       now,

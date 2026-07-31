@@ -10,8 +10,8 @@ import {
 } from "../../lib/ephemeralBubble";
 import { SpeechBubble } from "./SpeechBubble";
 
-/** Match sync-server tick so each step eases into the next. */
-const MOVE_MS = 1000;
+/** Horizontal walk speed in screen px/sec for duration scaling. */
+const WALK_PX_PER_SEC = 78;
 
 const BUBBLE_MAX = 3;
 const BUBBLE_TICK_MS = 400;
@@ -161,6 +161,7 @@ export function CharacterSprite({
   const left = useRef(new Animated.Value(targetLeft)).current;
   const bottom = useRef(new Animated.Value(targetBottom)).current;
   const primed = useRef(false);
+  const lastTarget = useRef({ left: targetLeft, bottom: targetBottom });
   const [moving, setMoving] = useState(false);
   const [now, setNow] = useState(Date.now());
 
@@ -168,22 +169,38 @@ export function CharacterSprite({
     if (!primed.current) {
       left.setValue(targetLeft);
       bottom.setValue(targetBottom);
+      lastTarget.current = { left: targetLeft, bottom: targetBottom };
       primed.current = true;
       return;
     }
+    const dx = targetLeft - lastTarget.current.left;
+    const dy = targetBottom - lastTarget.current.bottom;
+    const dist = Math.hypot(dx, dy);
+    lastTarget.current = { left: targetLeft, bottom: targetBottom };
+    if (dist < 0.5) {
+      left.setValue(targetLeft);
+      bottom.setValue(targetBottom);
+      return;
+    }
+    const duration = Math.round(
+      Math.min(
+        900,
+        Math.max(220, (dist / WALK_PX_PER_SEC) * 1000),
+      ),
+    );
     left.stopAnimation();
     bottom.stopAnimation();
     setMoving(true);
     const anim = Animated.parallel([
       Animated.timing(left, {
         toValue: targetLeft,
-        duration: MOVE_MS,
+        duration,
         easing: Easing.inOut(Easing.sin),
         useNativeDriver: false,
       }),
       Animated.timing(bottom, {
         toValue: targetBottom,
-        duration: MOVE_MS,
+        duration,
         easing: Easing.inOut(Easing.sin),
         useNativeDriver: false,
       }),

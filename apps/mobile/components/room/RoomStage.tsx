@@ -95,8 +95,10 @@ type Props = {
   expandCost: number;
   /** Fired when scrolled away so self is off-screen — walk toward view center. */
   onViewportCenterX?: (logicalX: number) => void;
-  /** User keys whose characters are currently visible in the viewport. */
+  /** User keys whose characters + bubbles are fully readable (HUD can hide). */
   onVisibleUserKeys?: (keys: string[]) => void;
+  /** User keys at least half-visible — OK to walk over and talk. */
+  onBodyVisibleUserKeys?: (keys: string[]) => void;
   /** Current dirt level (0-3) for displaying dirt overlays. */
   dirtLevel?: number;
   /** Per-room plant / TV / bed care timestamps for indicators. */
@@ -178,6 +180,7 @@ export function RoomStage({
   expandCost,
   onViewportCenterX,
   onVisibleUserKeys,
+  onBodyVisibleUserKeys,
   dirtLevel = 0,
   furnitureCare = null,
 }: Props) {
@@ -318,8 +321,15 @@ export function RoomStage({
   onViewportCenterXRef.current = onViewportCenterX;
   const onVisibleUserKeysRef = useRef(onVisibleUserKeys);
   onVisibleUserKeysRef.current = onVisibleUserKeys;
+  const onBodyVisibleUserKeysRef = useRef(onBodyVisibleUserKeys);
+  onBodyVisibleUserKeysRef.current = onBodyVisibleUserKeys;
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastVisibleKey = useRef("");
+  const lastBodyVisibleKey = useRef("");
+  const visibleKeysRef = useRef<Set<string>>(new Set());
+  const lastFollowSendAt = useRef(0);
+  const cameraFollowActiveRef = useRef(false);
 
   function handleTapPacked(item: PlacedFurniture) {
     if (editing) return;
@@ -364,7 +374,7 @@ export function RoomStage({
     const edgeInset = Math.max(24, Math.min(72, size.width * 0.1));
     // Keys whose in-world speech is fully readable (HUD should hide for them).
     const chatVisible: string[] = [];
-    let selfOnScreen = true;
+    const bodyVisible: string[] = [];
     let selfLogicalX = span / 2;
     // Overhead chat band is ~180px wide, centered on the sprite.
     const bubbleHalf = 90;
@@ -373,12 +383,11 @@ export function RoomStage({
       const member = room.memberState[String(actor.characterId)];
       if (!member) continue;
       const bounds = characterContentBounds(member.position.x, span, displayScale);
-      // Body counts as on-screen for camera follow with a looser half-visible test.
+      const bubbleLeft = bounds.center - bubbleHalf;
+      const bubbleRight = bounds.center + bubbleHalf;
       const bodyHalfVisible =
         bounds.right > viewLeft + bounds.drawBase * 0.5 &&
         bounds.left < viewRight - bounds.drawBase * 0.5;
-      const bubbleLeft = bounds.center - bubbleHalf;
-      const bubbleRight = bounds.center + bubbleHalf;
 
       // Only treat chat as "on screen" when the whole character AND its
       // overhead bubble sit fully inside the readable viewport. Edge / half
@@ -399,29 +408,73 @@ export function RoomStage({
         chatVisible.push(actor.userKey);
       }
       if (actor.isSelf) {
-        selfOnScreen = bodyHalfVisible;
         selfLogicalX = member.position.x;
+      } else if (member.presence === "active" && bodyHalfVisible) {
+        bodyVisible.push(actor.userKey);
       }
     }
 
     const visibleKey = chatVisible.slice().sort().join(",");
+    visibleKeysRef.current = new Set(bodyVisible);
     if (visibleKey !== lastVisibleKey.current) {
       lastVisibleKey.current = visibleKey;
       onVisibleUserKeysRef.current?.(chatVisible);
     }
+    const bodyKey = bodyVisible.slice().sort().join(",");
+    if (bodyKey !== lastBodyVisibleKey.current) {
+      lastBodyVisibleKey.current = bodyKey;
+      onBodyVisibleUserKeysRef.current?.(bodyVisible);
+    }
 
-    // Stay in camera: when scrolled off-screen, walk toward the view center.
-    if (selfOnScreen || !onViewportCenterXRef.current) return;
+    // Corner deadzones: when self enters the left/right edge band (or leaves
+    // the frame), follow the camera quickly with small continuous steps.
+    // When the camera is still and self is in the comfort band, stop so roam resumes.
+    if (!onViewportCenterXRef.current) return;
 
-    const viewCenter = scrollX + size.width / 2;
-    const worldX = viewCenter - filler;
-    const targetX = Math.max(0, Math.min(span, (worldX / worldW) * span));
-    if (Math.abs(targetX - selfLogicalX) < 0.35) return;
+    const selfBounds = characterContentBounds(selfLogicalX, span, displayScale);
+    const edgeZone = Math.max(56, size.width * 0.2);
+    const inLeftDeadzone = selfBounds.center < viewLeft + edgeZone;
+    const inRightDeadzone = selfBounds.center > viewRight - edgeZone;
+    const offFrame =
+      selfBounds.right < viewLeft || selfBounds.left > viewRight;
+    const needsFollow = inLeftDeadzone || inRightDeadzone || offFrame;
 
-    if (viewportTimer.current) clearTimeout(viewportTimer.current);
-    viewportTimer.current = setTimeout(() => {
-      onViewportCenterXRef.current?.(targetX);
-    }, 140);
+    if (!needsFollow) {
+      cameraFollowActiveRef.current = false;
+      if (viewportTimer.current) {
+        clearTimeout(viewportTimer.current);
+        viewportTimer.current = null;
+      }
+      return;
+    }
+
+    cameraFollowActiveRef.current = true;
+    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+    scrollIdleTimer.current = setTimeout(() => {
+      cameraFollowActiveRef.current = false;
+    }, 380);
+
+    const viewCenterPx = scrollX + size.width / 2;
+    const cameraWorldX = viewCenterPx - filler;
+    const cameraLogicalX = Math.max(
+      0,
+      Math.min(span, (cameraWorldX / Math.max(1, worldW)) * span),
+    );
+    const delta = cameraLogicalX - selfLogicalX;
+    if (Math.abs(delta) < 0.06) return;
+
+    const now = Date.now();
+    // React quickly while scrolling — throttle just enough to avoid floods.
+    if (now - lastFollowSendAt.current < 55) return;
+    lastFollowSendAt.current = now;
+
+    // Close a chunk of the remaining gap each tick; sprite lerp smooths it.
+    const followStep = Math.max(
+      0.28,
+      Math.min(1.6, Math.abs(delta) * 0.55),
+    );
+    const step = Math.sign(delta) * Math.min(Math.abs(delta), followStep);
+    onViewportCenterXRef.current(selfLogicalX + step);
   }
 
   function onScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
@@ -1159,7 +1212,12 @@ export function RoomStage({
                     bubbleAlign = dx <= 0 ? "left" : "right";
                     bubbleNudgeX = dx <= 0 ? -10 : 10;
                   }
+                  // Only face someone you can actually see on this screen.
+                  // (Peers walking to you is driven by their own client/camera.)
+                  const otherVisible =
+                    !actor.isSelf || visibleKeysRef.current.has(other.userKey);
                   if (
+                    otherVisible &&
                     member.presence === "active" &&
                     Math.abs(dx) < 3.2 &&
                     Math.abs(member.position.y - om.position.y) < 2.2

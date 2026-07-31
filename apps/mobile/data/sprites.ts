@@ -4,6 +4,8 @@
  * Alternate: clothed sheets from images.zip for quick presets.
  */
 
+import { Image, type ImageSourcePropType } from "react-native";
+
 export const COZY_SHEET = {
   source: require("../assets/characters/char_free/global.png") as number,
   width: 256,
@@ -84,4 +86,30 @@ export function sheetDirRow(facing: "left" | "right"): number {
 export function sheetSourceForId(sheetId: string): number {
   const found = SHEET_PRESETS.find((p) => p.id === sheetId);
   return found?.source ?? SHEET_PRESETS[0].source;
+}
+
+function assetUri(source: ImageSourcePropType): string | null {
+  if (typeof source === "string") return source;
+  if (typeof source === "number") {
+    const resolved = Image.resolveAssetSource(source);
+    return resolved?.uri ?? null;
+  }
+  if (source && typeof source === "object" && "uri" in source && source.uri) {
+    return source.uri;
+  }
+  return null;
+}
+
+/** Warm the character spritesheets so hallway/room faces aren't blank on first paint. */
+export function preloadCharacterAssets(): void {
+  const sources: ImageSourcePropType[] = [
+    COZY_SHEET.source,
+    ...SHEET_PRESETS.map((p) => p.source),
+  ];
+  for (const source of sources) {
+    const uri = assetUri(source);
+    if (uri) {
+      void Image.prefetch(uri);
+    }
+  }
 }

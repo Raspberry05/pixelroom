@@ -184,7 +184,25 @@ export function performAction(
       // Far-apart characters keep their own scroll/camera positions —
       // never rush across the room just to socialize.
       if (areNearForConversation(actor, target)) {
-        next = approachTarget(next, actorId, targetId, now);
+        if (source === "auto") {
+          // Sim NPCs may close the last bit of gap when already nearby.
+          next = approachTarget(next, actorId, targetId, now);
+        } else {
+          // Player commands: face in place only — no teleport. Walking over
+          // happens on the client when the target is visible on their screen.
+          next = withMemberState(
+            next,
+            actorId,
+            { facing: faceToward(actor, target) },
+            now,
+          );
+          next = withMemberState(
+            next,
+            targetId,
+            { facing: faceToward(target, actor) },
+            now,
+          );
+        }
       } else if (source === "auto") {
         throw new Error("targets too far apart for auto social");
       }

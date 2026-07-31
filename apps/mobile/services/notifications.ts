@@ -5,7 +5,7 @@ export type NotificationPermissionStatus = "granted" | "denied" | "undetermined"
 export type PushNotification = {
   title: string;
   body: string;
-  data?: Record<string, any>;
+  data?: Record<string, unknown>;
 };
 
 /**
@@ -17,19 +17,19 @@ export async function requestNotificationPermissions(): Promise<NotificationPerm
     if (!("Notification" in window)) {
       return "denied";
     }
-    
+
     if (Notification.permission === "granted") {
       return "granted";
     }
-    
+
     if (Notification.permission === "denied") {
       return "denied";
     }
-    
+
     const permission = await Notification.requestPermission();
     return permission === "granted" ? "granted" : "denied";
   }
-  
+
   // For native platforms, we'd use expo-notifications here
   // This is a placeholder implementation
   return "granted";
@@ -43,7 +43,7 @@ export async function getNotificationPermissionStatus(): Promise<NotificationPer
     if (!("Notification" in window)) {
       return "denied";
     }
-    
+
     switch (Notification.permission) {
       case "granted":
         return "granted";
@@ -53,32 +53,46 @@ export async function getNotificationPermissionStatus(): Promise<NotificationPer
         return "undetermined";
     }
   }
-  
+
   return "granted";
 }
 
+function pageIsHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
+}
+
 /**
- * Send a local notification
+ * OS / browser notification — only when the tab is in the background.
+ * While focused, the in-app NotificationBar is enough (and Cursor/Electron
+ * would otherwise surface these as IDE toasts).
  */
-export async function sendLocalNotification(notification: PushNotification): Promise<void> {
+export async function sendLocalNotification(
+  notification: PushNotification,
+): Promise<void> {
   if (Platform.OS === "web") {
-    const permission = await getNotificationPermissionStatus();
-    if (permission !== "granted") {
-      console.warn("Notification permission not granted");
+    if (!pageIsHidden()) {
       return;
     }
-    
+
+    const permission = await getNotificationPermissionStatus();
+    if (permission !== "granted") {
+      return;
+    }
+
     if ("Notification" in window) {
       new Notification(notification.title, {
         body: notification.body,
         icon: "/favicon.png",
         badge: "/favicon.png",
-        tag: notification.data?.id,
+        tag:
+          typeof notification.data?.id === "string"
+            ? notification.data.id
+            : undefined,
         requireInteraction: false,
       });
     }
   }
-  
+
   // For native platforms, we'd use expo-notifications.scheduleNotificationAsync here
 }
 
@@ -93,8 +107,8 @@ export async function cancelAllNotifications(): Promise<void> {
  * Set up notification handlers for incoming notifications
  */
 export function setupNotificationHandlers(
-  onNotificationReceived?: (notification: PushNotification) => void,
-  onNotificationTapped?: (notification: PushNotification) => void,
+  _onNotificationReceived?: (notification: PushNotification) => void,
+  _onNotificationTapped?: (notification: PushNotification) => void,
 ): () => void {
   // This would set up listeners for expo-notifications events
   // Return a cleanup function

@@ -77,6 +77,7 @@ import {
 } from "./data/appearanceStore";
 import { usePixelSync } from "./sync/client";
 import { colors } from "./theme";
+import { preloadCharacterAssets } from "./data/sprites";
 
 const INV_KEY = "pixelroom.inventory.v4";
 
@@ -175,6 +176,7 @@ function resolveInitialBoot(): {
 export default function App() {
   useEffect(() => {
     ensureSharpPixelsOnWeb();
+    preloadCharacterAssets();
     requestNotificationPermissions();
   }, []);
 
@@ -305,10 +307,14 @@ export default function App() {
     if (lastNotifyMsgId.current === last.id) return;
     lastNotifyMsgId.current = last.id;
 
+    const decryptFailed =
+      last.text === "[unable to decrypt]" || last.text === "[encrypted]";
+    const body = decryptFailed ? "New encrypted message" : last.text;
+
     setNotification({
       id: last.id,
       title: last.senderName,
-      body: last.text,
+      body,
       timestamp: Date.now(),
       type: "message",
       onPress: () => {
@@ -316,11 +322,14 @@ export default function App() {
       },
     });
 
-    void sendLocalNotification({
-      title: last.senderName,
-      body: last.text,
-      data: { roomId: String(last.roomId), messageId: last.id },
-    });
+    // OS toast only when backgrounded; never for failed decrypt placeholders.
+    if (!decryptFailed) {
+      void sendLocalNotification({
+        title: last.senderName,
+        body,
+        data: { roomId: String(last.roomId), messageId: last.id, id: last.id },
+      });
+    }
   }, [sync.notifyChat, userKey]);
 
   function push(screen: StackScreen) {

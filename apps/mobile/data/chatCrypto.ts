@@ -1,4 +1,5 @@
 import type { Room } from "@pixelroom/core";
+import { asRoomId } from "@pixelroom/core";
 import {
   base64ToBytes,
   bytesToBase64,
@@ -16,6 +17,7 @@ import {
   BOB_ID,
   CAROL_ID,
   DAVE_ID,
+  DEMO_USERS,
   type DemoUserKey,
 } from "./seed";
 import type { ChatEnvelope, ChatLine } from "../sync/protocol";
@@ -66,6 +68,29 @@ function peerForDm(room: Room, selfKey: DemoUserKey): DemoUserKey | null {
 function partyKeyForRoom(room: Room): Uint8Array {
   const members = userKeysFromRoom(room);
   return derivePartyRoomKey(members.map((k) => demoPublicKey(k)));
+}
+
+/** Minimal room used only to derive E2EE keys for notifications while not joined. */
+export function roomStubForCrypto(
+  roomId: string,
+  memberKeys: DemoUserKey[],
+  mode: "dm" | "party",
+): Room {
+  const keys = memberKeys.length > 0 ? memberKeys : [...DEMO_USER_KEYS];
+  const memberIds = keys.map((k) => DEMO_USERS[k].character.id);
+  return {
+    id: asRoomId(roomId),
+    kind: mode,
+    name: null,
+    memberIds,
+    adminIds: mode === "party" ? memberIds.slice(0, 1) : [],
+    styleId: "loft",
+    hotspots: [],
+    memberState: {},
+    actionLog: [],
+    createdAt: 0,
+    updatedAt: 0,
+  };
 }
 
 export async function encryptChatText(input: {

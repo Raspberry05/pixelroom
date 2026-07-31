@@ -78,22 +78,32 @@ export function HallwayScreen({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const bump = () => setAppearanceTick((n) => n + 1);
     const onStorage = (event: StorageEvent) => {
-      if (event.key === APPEARANCE_STORAGE_KEY) {
-        setAppearanceTick((n) => n + 1);
-      }
+      if (event.key === APPEARANCE_STORAGE_KEY) bump();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") bump();
     };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("focus", bump);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", bump);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    // appearanceTick re-queries peer looks after another tab saves an outfit.
+    void appearanceTick;
     if (!q) return conversations;
     return conversations.filter(
       (c) => c.title.toLowerCase().includes(q) || c.preview.toLowerCase().includes(q),
     );
-  }, [conversations, query]);
+  }, [conversations, query, appearanceTick]);
 
   return (
     <View style={styles.flex}>
@@ -120,7 +130,7 @@ export function HallwayScreen({
       <ScrollView style={styles.list}>
         {filtered.map((convo) => (
           <Pressable
-            key={`${String(convo.roomId)}:${appearanceTick}`}
+            key={String(convo.roomId)}
             style={styles.row}
             onPress={() => onOpenRoom(convo.roomId)}
           >

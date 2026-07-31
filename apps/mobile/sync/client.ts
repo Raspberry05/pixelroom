@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionKind, PresenceState, Room } from "@pixelroom/core";
-import { decryptChatLine, decryptChatLines, encryptChatText } from "../data/chatCrypto";
+import { decryptChatLine, decryptChatLines, encryptChatText, roomStubForCrypto } from "../data/chatCrypto";
 import type { RoomDocument } from "../data/roomLayout";
 import { createSeedDmRoom, type DemoUserKey } from "../data/seed";
 import type {
@@ -147,10 +147,19 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
             }
             setPeerTyping((prev) => ({ ...prev, [decrypted.senderKey]: false }));
           } else if (data.type === "chat_notify") {
+            const mode = data.message.envelope?.mode ?? "dm";
+            const notifyRoom =
+              joinedRoomRef.current === data.message.roomId && roomRef.current
+                ? roomRef.current
+                : roomStubForCrypto(
+                    data.message.roomId,
+                    data.memberKeys ?? [],
+                    mode,
+                  );
             const decrypted = await decryptChatLine(
               data.message,
               userKey,
-              roomRef.current,
+              notifyRoom,
             );
             if (cancelled) return;
             setNotifyChat(decrypted);

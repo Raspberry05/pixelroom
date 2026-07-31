@@ -89,6 +89,8 @@ export type ServerToClient =
       /** Offline-from-room alert for conversation recipients only. */
       type: "chat_notify";
       message: ChatLine;
+      /** Room members needed to derive party E2EE keys while not joined. */
+      memberKeys: DemoUserKey[];
     }
   | {
       type: "room_layout";
