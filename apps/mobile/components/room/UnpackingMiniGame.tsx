@@ -232,7 +232,7 @@ const styles = StyleSheet.create({
     gap: space.xs,
   },
   title: {
-    ...typography.h3,
+    ...typography.brand,
     fontSize: 24,
     fontWeight: "700",
     color: colors.ink,
