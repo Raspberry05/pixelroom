@@ -18,7 +18,7 @@ import {
   type Room,
 } from "./domain.js";
 
-type DemoUserKey = "alice" | "bob" | "carol";
+type DemoUserKey = "alice" | "bob" | "carol" | "dave";
 
 type ChatEnvelope = {
   version: 1;
@@ -100,19 +100,30 @@ const TICK_MS = 1000;
 const ALICE_ID = asCharacterId("char_alice");
 const BOB_ID = asCharacterId("char_bob");
 const CAROL_ID = asCharacterId("char_carol");
+const DAVE_ID = asCharacterId("char_dave");
 const DM_ALICE_BOB = asRoomId("dm:alice:bob");
 const DM_ALICE_CAROL = asRoomId("dm:alice:carol");
+const DM_ALICE_DAVE = asRoomId("dm:alice:dave");
 const DM_BOB_CAROL = asRoomId("dm:bob:carol");
-const PARTY_ROOM_ID = asRoomId("party:alice:bob:carol");
+const DM_BOB_DAVE = asRoomId("dm:bob:dave");
+const DM_CAROL_DAVE = asRoomId("dm:carol:dave");
+const PARTY_ROOM_ID = asRoomId("party:alice:bob:carol:dave");
+const TRIO_ROOM_ID = asRoomId("party:alice:bob:carol");
 const TEST_LAB_ROOM_ID = "dm:local:test-lab";
+const ALL_DEMO_KEYS: DemoUserKey[] = ["alice", "bob", "carol", "dave"];
 
 function isDemoUserKey(value: string): value is DemoUserKey {
-  return value === "alice" || value === "bob" || value === "carol";
+  return (
+    value === "alice" ||
+    value === "bob" ||
+    value === "carol" ||
+    value === "dave"
+  );
 }
 
 function parseRoomMemberKeys(roomId: string): DemoUserKey[] | null {
   if (roomId === TEST_LAB_ROOM_ID) {
-    return ["alice", "bob", "carol"];
+    return [...ALL_DEMO_KEYS];
   }
   const dm = /^dm:([a-z]+):([a-z]+)$/.exec(roomId);
   if (dm) {
@@ -179,12 +190,28 @@ const characters: Record<string, Character> = {
     },
     createdAt: Date.now(),
   },
+  [String(DAVE_ID)]: {
+    id: DAVE_ID,
+    accountId: asAccountId("acct_dave"),
+    displayName: "Dave",
+    appearance: {
+      kit: "cozy",
+      sheetId: "200",
+      hair: "blond",
+      outfit: "red",
+      pants: "blue",
+      skin: "tan",
+      accessory: null,
+    },
+    createdAt: Date.now(),
+  },
 };
 
 const characterByUser: Record<DemoUserKey, CharacterId> = {
   alice: ALICE_ID,
   bob: BOB_ID,
   carol: CAROL_ID,
+  dave: DAVE_ID,
 };
 
 function characterIdsForKeys(keys: DemoUserKey[]): CharacterId[] {
@@ -195,17 +222,20 @@ const nameByUser: Record<DemoUserKey, string> = {
   alice: "Alice",
   bob: "Bob",
   carol: "Carol",
+  dave: "Dave",
 };
 
 function userKeyForCharacter(id: CharacterId): DemoUserKey {
   if (id === BOB_ID) return "bob";
   if (id === CAROL_ID) return "carol";
+  if (id === DAVE_ID) return "dave";
   return "alice";
 }
 
 function resolveUserKey(raw: string | undefined): DemoUserKey {
   if (raw === "bob") return "bob";
   if (raw === "carol") return "carol";
+  if (raw === "dave") return "dave";
   return "alice";
 }
 
@@ -219,12 +249,24 @@ rooms.set(
   createSeedCompatibleRoom(DM_ALICE_CAROL, [ALICE_ID, CAROL_ID], { kind: "dm" }),
 );
 rooms.set(
+  String(DM_ALICE_DAVE),
+  createSeedCompatibleRoom(DM_ALICE_DAVE, [ALICE_ID, DAVE_ID], { kind: "dm" }),
+);
+rooms.set(
   String(DM_BOB_CAROL),
   createSeedCompatibleRoom(DM_BOB_CAROL, [BOB_ID, CAROL_ID], { kind: "dm" }),
 );
 rooms.set(
+  String(DM_BOB_DAVE),
+  createSeedCompatibleRoom(DM_BOB_DAVE, [BOB_ID, DAVE_ID], { kind: "dm" }),
+);
+rooms.set(
+  String(DM_CAROL_DAVE),
+  createSeedCompatibleRoom(DM_CAROL_DAVE, [CAROL_ID, DAVE_ID], { kind: "dm" }),
+);
+rooms.set(
   String(PARTY_ROOM_ID),
-  createSeedCompatibleRoom(PARTY_ROOM_ID, [ALICE_ID, BOB_ID, CAROL_ID], {
+  createSeedCompatibleRoom(PARTY_ROOM_ID, [ALICE_ID, BOB_ID, CAROL_ID, DAVE_ID], {
     kind: "party",
     name: "Pixel crew",
     adminIds: [ALICE_ID],
@@ -232,8 +274,17 @@ rooms.set(
   }),
 );
 rooms.set(
+  String(TRIO_ROOM_ID),
+  createSeedCompatibleRoom(TRIO_ROOM_ID, [ALICE_ID, BOB_ID, CAROL_ID], {
+    kind: "party",
+    name: "Trio",
+    adminIds: [ALICE_ID],
+    styleId: "loft",
+  }),
+);
+rooms.set(
   TEST_LAB_ROOM_ID,
-  createSeedCompatibleRoom(asRoomId(TEST_LAB_ROOM_ID), [ALICE_ID, BOB_ID, CAROL_ID], {
+  createSeedCompatibleRoom(asRoomId(TEST_LAB_ROOM_ID), [ALICE_ID, BOB_ID, CAROL_ID, DAVE_ID], {
     kind: "party",
     name: "Test Lab",
     adminIds: [ALICE_ID],
@@ -244,8 +295,12 @@ rooms.set(
 const messages = new Map<string, ChatLine[]>();
 messages.set(String(DM_ALICE_BOB), []);
 messages.set(String(DM_ALICE_CAROL), []);
+messages.set(String(DM_ALICE_DAVE), []);
 messages.set(String(DM_BOB_CAROL), []);
+messages.set(String(DM_BOB_DAVE), []);
+messages.set(String(DM_CAROL_DAVE), []);
 messages.set(String(PARTY_ROOM_ID), []);
+messages.set(String(TRIO_ROOM_ID), []);
 messages.set(TEST_LAB_ROOM_ID, []);
 /** Shared furniture layout — both members edit; last write wins with rev. */
 const layouts = new Map<string, RoomLayoutState>();
@@ -944,4 +999,4 @@ setInterval(() => {
 }, TICK_MS);
 
 console.log(`Pixelroom sync server on ws://localhost:${PORT}`);
-console.log(`Open browsers: ?user=alice | ?user=bob | ?user=carol`);
+console.log(`Open browsers: ?user=alice | ?user=bob | ?user=carol | ?user=dave`);

@@ -11,7 +11,7 @@ import {
 } from "@pixelroom/core";
 import { TEST_LAB_ROOM_ID } from "./testLab";
 
-export type DemoUserKey = "alice" | "bob" | "carol";
+export type DemoUserKey = "alice" | "bob" | "carol" | "dave";
 
 export type Contact = {
   userKey: DemoUserKey | string;
@@ -56,8 +56,15 @@ const NOW = 1_700_000_000_000;
 export const ALICE_ID = asCharacterId("char_alice");
 export const BOB_ID = asCharacterId("char_bob");
 export const CAROL_ID = asCharacterId("char_carol");
-export const PARTY_ROOM_ID = asRoomId("party:alice:bob:carol");
+export const DAVE_ID = asCharacterId("char_dave");
+export const PARTY_ROOM_ID = asRoomId("party:alice:bob:carol:dave");
+/** Smaller party — Alice, Bob & Carol only. */
+export const TRIO_ROOM_ID = asRoomId("party:alice:bob:carol");
 export { TEST_LAB_ROOM_ID };
+
+/** All demo members (Pixel crew / Test Lab). */
+export const ALL_DEMO_KEYS: DemoUserKey[] = ["alice", "bob", "carol", "dave"];
+export const TRIO_KEYS: DemoUserKey[] = ["alice", "bob", "carol"];
 
 /** Canonical DM id for a pair (order-independent). */
 export function dmRoomIdFor(a: DemoUserKey, b: DemoUserKey): RoomId {
@@ -77,13 +84,18 @@ export const DM_ALICE_CAROL_ID = dmRoomIdFor("alice", "carol");
 export const DM_BOB_CAROL_ID = dmRoomIdFor("bob", "carol");
 
 export function isDemoUserKey(value: string): value is DemoUserKey {
-  return value === "alice" || value === "bob" || value === "carol";
+  return (
+    value === "alice" ||
+    value === "bob" ||
+    value === "carol" ||
+    value === "dave"
+  );
 }
 
-/** Parse `dm:alice:bob` / `party:alice:bob:carol` member lists. */
+/** Parse `dm:alice:bob` / `party:alice:bob:carol:dave` member lists. */
 export function parseRoomMemberKeys(roomId: string): DemoUserKey[] | null {
   if (roomId === String(TEST_LAB_ROOM_ID)) {
-    return ["alice", "bob", "carol"];
+    return [...ALL_DEMO_KEYS];
   }
   const dm = /^dm:([a-z]+):([a-z]+)$/.exec(roomId);
   if (dm) {
@@ -179,11 +191,33 @@ export const DEMO_USERS: Record<DemoUserKey, DemoUser> = {
       createdAt: NOW,
     },
   },
+  dave: {
+    key: "dave",
+    username: "dave",
+    phone: "+1 555 0104",
+    country: "US",
+    character: {
+      id: DAVE_ID,
+      accountId: asAccountId("acct_dave"),
+      displayName: "Dave",
+      appearance: {
+        kit: "cozy",
+        sheetId: "200",
+        hair: "blond",
+        outfit: "red",
+        pants: "blue",
+        skin: "tan",
+        accessory: null,
+      },
+      createdAt: NOW,
+    },
+  },
 };
 
 export function resolveDemoUser(raw: string | null | undefined): DemoUserKey {
   if (raw === "bob") return "bob";
   if (raw === "carol") return "carol";
+  if (raw === "dave") return "dave";
   return "alice";
 }
 
@@ -191,18 +225,16 @@ export function getPeerKey(self: DemoUserKey): DemoUserKey {
   return self === "alice" ? "bob" : "alice";
 }
 
-/** Hallway avatar faces — DMs use peer only; parties use up to 3 members. */
+/** Hallway avatar faces — always peers only (never self); parties use up to 2. */
 export function appearancesForConversation(
   memberKeys: DemoUserKey[],
   kind: "dm" | "party",
   selfKey: DemoUserKey,
 ): Appearance[] {
+  const peers = memberKeys.filter((k) => k !== selfKey);
   const keys =
-    kind === "dm"
-      ? memberKeys.filter((k) => k !== selfKey).slice(0, 1)
-      : memberKeys.slice(0, 3);
-  const fallback = keys.length > 0 ? keys : memberKeys.slice(0, kind === "dm" ? 1 : 3);
-  return fallback.map((k) => DEMO_USERS[k].character.appearance);
+    kind === "dm" ? peers.slice(0, 1) : peers.slice(0, 3);
+  return keys.map((k) => DEMO_USERS[k].character.appearance);
 }
 
 export function contactsFor(self: DemoUserKey): Contact[] {
@@ -242,7 +274,7 @@ export function initialConversations(self: DemoUserKey): ConversationPreview[] {
       roomId: TEST_LAB_ROOM_ID,
       kind: "party",
       title: "Test Lab",
-      memberKeys: ["alice", "bob", "carol"],
+      memberKeys: [...ALL_DEMO_KEYS],
       preview: "Shared sandbox · all demo users",
       updatedAt: NOW + 2,
       personalStyleId: "loft",
@@ -251,10 +283,22 @@ export function initialConversations(self: DemoUserKey): ConversationPreview[] {
       roomId: PARTY_ROOM_ID,
       kind: "party",
       title: "Pixel crew",
-      memberKeys: ["alice", "bob", "carol"],
-      preview: "Party · Alice, Bob & Carol",
+      memberKeys: [...ALL_DEMO_KEYS],
+      preview: "Party · Alice, Bob, Carol & Dave",
       updatedAt: NOW + 1,
     },
+    ...(TRIO_KEYS.includes(self)
+      ? [
+          {
+            roomId: TRIO_ROOM_ID,
+            kind: "party" as const,
+            title: "Trio",
+            memberKeys: [...TRIO_KEYS],
+            preview: "Party · Alice, Bob & Carol",
+            updatedAt: NOW,
+          },
+        ]
+      : []),
     ...dms,
   ];
 }
@@ -301,14 +345,15 @@ export function createSeedPartyRoom(): Room {
     id: PARTY_ROOM_ID,
     kind: "party",
     name: "Pixel crew",
-    memberIds: [ALICE_ID, BOB_ID, CAROL_ID],
+    memberIds: [ALICE_ID, BOB_ID, CAROL_ID, DAVE_ID],
     adminIds: [ALICE_ID],
     styleId: "loft",
     hotspots: DEFAULT_HOTSPOTS.map((h) => ({ ...h, position: { ...h.position } })),
     memberState: {
       [String(ALICE_ID)]: sleepingMember(ALICE_ID, 3, 1.6, "right"),
-      [String(BOB_ID)]: sleepingMember(BOB_ID, 7, 2.2, "left"),
-      [String(CAROL_ID)]: sleepingMember(CAROL_ID, 10, 1.4, "left"),
+      [String(BOB_ID)]: sleepingMember(BOB_ID, 6, 2.2, "left"),
+      [String(CAROL_ID)]: sleepingMember(CAROL_ID, 9, 1.4, "left"),
+      [String(DAVE_ID)]: sleepingMember(DAVE_ID, 12, 2.0, "left"),
     },
     actionLog: [],
     createdAt: NOW,

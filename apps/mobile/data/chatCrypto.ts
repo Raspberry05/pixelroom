@@ -15,6 +15,7 @@ import {
   ALICE_ID,
   BOB_ID,
   CAROL_ID,
+  DAVE_ID,
   type DemoUserKey,
 } from "./seed";
 import type { ChatEnvelope, ChatLine } from "../sync/protocol";
@@ -26,6 +27,7 @@ const CHAR_TO_USER: Record<string, DemoUserKey> = {
   [String(ALICE_ID)]: "alice",
   [String(BOB_ID)]: "bob",
   [String(CAROL_ID)]: "carol",
+  [String(DAVE_ID)]: "dave",
 };
 
 function sessionCacheKey(local: DemoUserKey, remote: DemoUserKey): string {

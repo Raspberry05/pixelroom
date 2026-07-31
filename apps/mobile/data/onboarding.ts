@@ -36,7 +36,7 @@ export function formatPhoneDisplay(digits: string): string {
   return "";
 }
 
-/** Match demo seed phones, else stable slot from last digits (sync still alice|bob|carol). */
+/** Match demo seed phones, else stable slot from last digits. */
 export function userKeyFromPhone(phone: string): DemoUserKey {
   const digits = normalizePhoneDigits(phone);
   const compact = digits.replace(/^1(?=\d{10}$)/, "");
@@ -55,8 +55,8 @@ export function userKeyFromPhone(phone: string): DemoUserKey {
   for (const ch of compact || digits || "0") {
     sum += Number(ch) || 0;
   }
-  const slots: DemoUserKey[] = ["alice", "bob", "carol"];
-  return slots[sum % 3]!;
+  const slots: DemoUserKey[] = ["alice", "bob", "carol", "dave"];
+  return slots[sum % 4]!;
 }
 
 export function issueDemoOtp(): string {

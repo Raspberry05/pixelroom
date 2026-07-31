@@ -6,7 +6,7 @@ import {
 import type { DemoUserKey } from "./seed";
 
 /**
- * Deterministic demo NaCl identities so any tab can encrypt to alice/bob/carol
+ * Deterministic demo NaCl identities so any tab can encrypt to demo users
  * without a key directory service.
  */
 function seedForUser(key: DemoUserKey): Uint8Array {
@@ -25,6 +25,7 @@ const REG_IDS: Record<DemoUserKey, number> = {
   alice: 1001,
   bob: 1002,
   carol: 1003,
+  dave: 1004,
 };
 
 const identityCache = new Map<DemoUserKey, IdentityBundle>();
@@ -45,4 +46,4 @@ export function demoPublicKeyBase64(key: DemoUserKey): string {
   return bytesToBase64(demoPublicKey(key));
 }
 
-export const DEMO_USER_KEYS: DemoUserKey[] = ["alice", "bob", "carol"];
+export const DEMO_USER_KEYS: DemoUserKey[] = ["alice", "bob", "carol", "dave"];

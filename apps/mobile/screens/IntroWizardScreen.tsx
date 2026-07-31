@@ -30,6 +30,7 @@ const DEMO_HINTS: { key: DemoUserKey; label: string; phone: string }[] = [
   { key: "alice", label: "Alice", phone: "+1 555 0101" },
   { key: "bob", label: "Bob", phone: "+1 555 0102" },
   { key: "carol", label: "Carol", phone: "+1 555 0103" },
+  { key: "dave", label: "Dave", phone: "+1 555 0104" },
 ];
 
 export function IntroWizardScreen({ onComplete }: Props) {

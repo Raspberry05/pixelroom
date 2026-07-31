@@ -247,7 +247,8 @@ export function RoomScreen({
   coinsRef.current = coins;
   const lastSpeakAtRef = useRef(0);
 
-  // Users whose in-world head-chat is on screen (HUD should hide for them).
+  // Users whose in-world head-chat is fully readable (HUD should hide for them).
+  // Edge / half-visible speakers still get bottom HUD bubbles.
   const chatVisibleSet = useMemo(() => {
     if (editing) return new Set<string>();
     return new Set(visibleUserKeys);
@@ -270,7 +271,7 @@ export function RoomScreen({
         : undefined;
       // Offline users: no HUD bubbles (not the same as "off-screen online").
       if (!member || member.presence === "sleeping") continue;
-      // Hide HUD only when that speaker's in-world chat is already on screen.
+      // Hide HUD only when that speaker's character + overhead bubble are fully readable.
       if (chatVisibleSet.has(line.senderKey)) continue;
       newestFirst.push(line);
     }

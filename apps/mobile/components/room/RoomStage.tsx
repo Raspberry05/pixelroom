@@ -360,35 +360,46 @@ export function RoomStage({
     const span = Math.max(CHUNK_CELLS, cols);
     const viewLeft = scrollX;
     const viewRight = scrollX + size.width;
-    const pad = Math.min(48, size.width * 0.06);
-    // Keys whose in-world speech bubbles are on-screen (not just the body).
+    // Soft edge: anything near the bezel counts as unreadable.
+    const edgeInset = Math.max(24, Math.min(72, size.width * 0.1));
+    // Keys whose in-world speech is fully readable (HUD should hide for them).
     const chatVisible: string[] = [];
     let selfOnScreen = true;
     let selfLogicalX = span / 2;
     // Overhead chat band is ~180px wide, centered on the sprite.
-    const bubbleHalf = 80;
+    const bubbleHalf = 90;
 
     for (const actor of actors) {
       const member = room.memberState[String(actor.characterId)];
       if (!member) continue;
       const bounds = characterContentBounds(member.position.x, span, displayScale);
-      const bodyOnScreen =
-        bounds.right > viewLeft + pad && bounds.left < viewRight - pad;
+      // Body counts as on-screen for camera follow with a looser half-visible test.
+      const bodyHalfVisible =
+        bounds.right > viewLeft + bounds.drawBase * 0.5 &&
+        bounds.left < viewRight - bounds.drawBase * 0.5;
       const bubbleLeft = bounds.center - bubbleHalf;
       const bubbleRight = bounds.center + bubbleHalf;
-      const bubblesOnScreen =
-        bubbleRight > viewLeft + pad && bubbleLeft < viewRight - pad;
 
-      // HUD fallback hides only when the in-world chat band is visible.
+      // Only treat chat as "on screen" when the whole character AND its
+      // overhead bubble sit fully inside the readable viewport. Edge / half
+      // clips keep the bottom HUD bubbles so text stays readable.
+      const characterFullyOnScreen =
+        bounds.left >= viewLeft + edgeInset &&
+        bounds.right <= viewRight - edgeInset;
+      const bubbleFullyOnScreen =
+        bubbleLeft >= viewLeft + edgeInset &&
+        bubbleRight <= viewRight - edgeInset;
+
       // Offline / sleeping never count — no bubbles for them at all.
       if (
         member.presence === "active" &&
-        bubblesOnScreen
+        characterFullyOnScreen &&
+        bubbleFullyOnScreen
       ) {
         chatVisible.push(actor.userKey);
       }
       if (actor.isSelf) {
-        selfOnScreen = bodyOnScreen;
+        selfOnScreen = bodyHalfVisible;
         selfLogicalX = member.position.x;
       }
     }
