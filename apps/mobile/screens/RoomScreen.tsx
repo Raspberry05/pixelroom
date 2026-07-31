@@ -26,6 +26,8 @@ import type { CallState } from "../components/CallScreen";
 import { DirtOverlay } from "../components/room/DirtOverlay";
 import { CookingMiniGame } from "../components/minigames/CookingMiniGame";
 import { CleaningMiniGame } from "../components/minigames/CleaningMiniGame";
+import { IngredientSelector } from "../components/cooking/IngredientSelector";
+import { DishResultModal } from "../components/cooking/DishResultModal";
 import {
   calculateDirtLevel,
   getAction,
@@ -33,6 +35,8 @@ import {
   type RoomCleanlinessState,
   type MiniGameType,
 } from "../data/minigames";
+import { GROCERY_ITEMS } from "../data/groceryItems";
+import type { IngredientAmount, CookedDish } from "../data/recipes";
 import {
   actionUnlockHint,
   furnitureSpritesInRoom,
@@ -42,7 +46,9 @@ import {
   consumePlacedFromInventory,
   createStarterInventory,
   inventoryIdForSprite,
+  getQty,
   refund,
+  spend,
   type InventoryState,
 } from "../data/inventory";
 import {
@@ -189,6 +195,9 @@ export function RoomScreen({
   const [status, setStatus] = useState<string | null>(null);
   const [activeMiniGame, setActiveMiniGame] = useState<MiniGameType | null>(null);
   const [selectedFurnitureForAction, setSelectedFurnitureForAction] = useState<string | null>(null);
+  const [showIngredientSelector, setShowIngredientSelector] = useState(false);
+  const [selectedIngredients, setSelectedIngredients] = useState<IngredientAmount[]>([]);
+  const [cookedDish, setCookedDish] = useState<CookedDish | null>(null);
   const peerKey =
     memberKeys?.find((k) => k !== selfKey) ??
     (selfKey === "alice" ? "bob" : "alice");
@@ -505,26 +514,75 @@ export function RoomScreen({
     if (!action) return;
     
     setSelectedFurnitureForAction(furnitureId);
-    setActiveMiniGame(action.miniGameType);
+    
+    if (action.miniGameType === "cooking") {
+      // Show ingredient selector first for cooking
+      setShowIngredientSelector(true);
+    } else {
+      // Other mini-games start directly
+      setActiveMiniGame(action.miniGameType);
+    }
   }
 
-  function handleMiniGameComplete() {
+  function handleIngredientsSelected(ingredients: IngredientAmount[]) {
+    // Deduct ingredients from inventory
+    let newInventory = inventory;
+    for (const ing of ingredients) {
+      const spent = spend(newInventory, ing.ingredientId, ing.amount);
+      if (spent) {
+        newInventory = spent;
+      }
+    }
+    onChangeInventory(newInventory);
+    
+    // Save selected ingredients and start cooking
+    setSelectedIngredients(ingredients);
+    setShowIngredientSelector(false);
+    setActiveMiniGame("cooking");
+  }
+
+  function handleIngredientSelectorCancel() {
+    setShowIngredientSelector(false);
+    setSelectedFurnitureForAction(null);
+  }
+
+  function handleMiniGameComplete(dish?: CookedDish) {
     setActiveMiniGame(null);
     setSelectedFurnitureForAction(null);
+    
     if (activeMiniGame === "cleaning") {
       onCleanRoom();
       setStatus("Room cleaned! ✨");
       setTimeout(() => setStatus(null), 2000);
+    } else if (activeMiniGame === "cooking" && dish) {
+      // Show cooking result
+      setCookedDish(dish);
     }
+    
+    setSelectedIngredients([]);
   }
 
   function handleMiniGameCancel() {
     setActiveMiniGame(null);
     setSelectedFurnitureForAction(null);
+    setSelectedIngredients([]);
+  }
+
+  function handleDishResultClose() {
+    setCookedDish(null);
   }
 
   function promptCleanRoom() {
     setActiveMiniGame("cleaning");
+  }
+  
+  // Get available ingredients for selector
+  const availableIngredients: Record<string, number> = {};
+  for (const item of GROCERY_ITEMS) {
+    const qty = getQty(inventory, item.id);
+    if (qty > 0) {
+      availableIngredients[item.id] = qty;
+    }
   }
 
   return (
@@ -743,6 +801,14 @@ export function RoomScreen({
         )}
       </View>
 
+      {/* Ingredient selector */}
+      <IngredientSelector
+        visible={showIngredientSelector}
+        availableIngredients={availableIngredients}
+        onConfirm={handleIngredientsSelected}
+        onCancel={handleIngredientSelectorCancel}
+      />
+
       {/* Mini-game modals */}
       <CleaningMiniGame
         visible={activeMiniGame === "cleaning"}
@@ -752,8 +818,16 @@ export function RoomScreen({
       />
       <CookingMiniGame
         visible={activeMiniGame === "cooking"}
+        selectedIngredients={selectedIngredients}
         onComplete={handleMiniGameComplete}
         onCancel={handleMiniGameCancel}
+      />
+      
+      {/* Dish result modal */}
+      <DishResultModal
+        visible={cookedDish !== null}
+        dish={cookedDish}
+        onClose={handleDishResultClose}
       />
     </View>
   );

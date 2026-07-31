@@ -8,7 +8,7 @@ import {
 import { SPRITE_BY_ID, type FurnitureSprite } from "./roomLayout";
 import { COZY_SHEET, SHEET_PRESETS } from "./sprites";
 
-export type StoreTabId = "furniture" | "housing" | "clothes";
+export type StoreTabId = "furniture" | "housing" | "clothes" | "grocery";
 
 export type ClothStoreItem = {
   id: string;
@@ -19,9 +19,10 @@ export type ClothStoreItem = {
   source: ImageSourcePropType;
 };
 
-export const STORE_TABS: { id: StoreTabId; label: string }[] = [
+export const STORE_TABS: { id: StoreTabId; label: string; emoji?: string }[] = [
   { id: "furniture", label: "Furniture" },
   { id: "housing", label: "Housing" },
+  { id: "grocery", label: "Grocery", emoji: "🛒" },
   { id: "clothes", label: "Clothes" },
 ];
 

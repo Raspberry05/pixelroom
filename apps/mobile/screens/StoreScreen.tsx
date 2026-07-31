@@ -23,6 +23,7 @@ import {
   type ClothStoreItem,
   type StoreTabId,
 } from "../data/storeCatalog";
+import { GROCERY_ITEMS, type GroceryItem } from "../data/groceryItems";
 import { WORLD_SCALE } from "../data/roomLayout";
 import { colors, radii, space, typography } from "../theme";
 
@@ -77,6 +78,12 @@ export function StoreScreen({
     onChangeInventory(refund(inventory, id, 1));
   }
 
+  function buyGrocery(item: GroceryItem) {
+    if (coins < item.price) return;
+    onChangeCoins(coins - item.price);
+    onChangeInventory(refund(inventory, item.id, 1));
+  }
+
   function buyCloth(item: ClothStoreItem) {
     if (ownedSet.has(item.id)) {
       onUnlockCloth(item.id, item.patch);
@@ -109,8 +116,29 @@ export function StoreScreen({
       </View>
 
       <ScrollView contentContainerStyle={styles.grid}>
-        {tab === "clothes"
-          ? CLOTH_CATALOG.map((item) => {
+        {tab === "grocery"
+          ? GROCERY_ITEMS.map((item) => {
+              const owned = getQty(inventory, item.id);
+              const canBuy = coins >= item.price;
+              return (
+                <View key={item.id} style={styles.card}>
+                  <View style={styles.thumbWrap}>
+                    <Text style={styles.groceryEmoji}>{item.emoji}</Text>
+                  </View>
+                  <Text style={styles.name}>{item.name}</Text>
+                  <Text style={styles.meta}>owned ×{owned}</Text>
+                  <Pressable
+                    style={[styles.btn, !canBuy && styles.btnDisabled]}
+                    onPress={() => buyGrocery(item)}
+                    disabled={!canBuy}
+                  >
+                    <Text style={styles.btnText}>Buy · {item.price}c</Text>
+                  </Pressable>
+                </View>
+              );
+            })
+          : tab === "clothes"
+            ? CLOTH_CATALOG.map((item) => {
               const owned = ownedSet.has(item.id);
               const canBuy = owned || coins >= item.price;
               return (
@@ -132,7 +160,7 @@ export function StoreScreen({
                 </View>
               );
             })
-          : inventoryItems.map((item) => {
+            : inventoryItems.map((item) => {
               const owned = getQty(inventory, item.id);
               const canBuy = coins >= item.price;
               const source = spriteSourceForItem(item);
@@ -236,4 +264,7 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.4 },
   btnText: { color: colors.surfaceRaised, fontWeight: "700", fontSize: 12 },
+  groceryEmoji: {
+    fontSize: 48,
+  },
 });

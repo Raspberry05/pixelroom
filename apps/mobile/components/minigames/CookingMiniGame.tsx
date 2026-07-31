@@ -9,9 +9,12 @@ import {
 } from "react-native";
 import { colors, radii, space, typography } from "../../theme";
 
+import type { IngredientAmount, CookedDish } from "../../data/recipes";
+
 type Props = {
   visible: boolean;
-  onComplete: () => void;
+  selectedIngredients?: IngredientAmount[];
+  onComplete: (dish?: CookedDish) => void;
   onCancel: () => void;
 };
 
@@ -29,7 +32,7 @@ const RECIPE_STEPS = [
   { id: 4, name: "Pasta", emoji: "🍝" },
 ];
 
-export function CookingMiniGame({ visible, onComplete, onCancel }: Props) {
+export function CookingMiniGame({ visible, selectedIngredients, onComplete, onCancel }: Props) {
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [cookingProgress, setCookingProgress] = useState(0);
@@ -55,7 +58,14 @@ export function CookingMiniGame({ visible, onComplete, onCancel }: Props) {
           if (prev >= 100) {
             clearInterval(timer);
             setTimeout(() => {
-              onComplete();
+              // Calculate dish result if ingredients were provided
+              if (selectedIngredients && selectedIngredients.length > 0) {
+                const { createDish } = require("../../data/recipes");
+                const dish = createDish(selectedIngredients);
+                onComplete(dish);
+              } else {
+                onComplete();
+              }
             }, 500);
             return 100;
           }
@@ -64,7 +74,7 @@ export function CookingMiniGame({ visible, onComplete, onCancel }: Props) {
       }, 50);
       return () => clearInterval(timer);
     }
-  }, [currentStep, visible, onComplete]);
+  }, [currentStep, visible, onComplete, selectedIngredients]);
 
   const handleIngredientPress = (ingredient: Ingredient) => {
     const correctIngredient = RECIPE_STEPS[currentStep];

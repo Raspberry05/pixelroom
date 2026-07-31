@@ -55,6 +55,7 @@ export const INVENTORY_CATALOG: InventoryItemDef[] = [
   { id: "furn_bed", name: "Bed", sprite: "bed", kind: "furniture", collision: "solid", price: 120, starterQty: 1 },
   { id: "furn_nightstand", name: "Nightstand", sprite: "nightstand", kind: "furniture", collision: "solid", price: 35, starterQty: 2 },
   { id: "furn_appliance", name: "Appliance", sprite: "appliance", kind: "furniture", collision: "solid", price: 90, starterQty: 1 },
+  { id: "furn_stove", name: "Stove", sprite: "appliance", kind: "furniture", collision: "solid", price: 100, starterQty: 0 },
   { id: "furn_tv", name: "TV", sprite: "tv", kind: "furniture", collision: "solid", price: 110, starterQty: 0 },
   { id: "furn_chair", name: "Chair", sprite: "chairDown", kind: "furniture", collision: "seat", price: 25, starterQty: 4 },
   { id: "furn_chair_l", name: "Chair ←", sprite: "chairLeft", kind: "furniture", collision: "seat", price: 25, starterQty: 2 },
