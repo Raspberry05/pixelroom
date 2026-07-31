@@ -84,6 +84,8 @@ export type PlacedFurniture = {
    */
   gy: number;
   anchor: FurnitureAnchor;
+  /** Whether furniture is still packed and needs to be unpacked via mini-game. */
+  packed?: boolean;
 };
 
 /** Sparse tile maps: key = `${gx},${gy}`. */

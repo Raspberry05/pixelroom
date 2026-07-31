@@ -58,6 +58,7 @@ import { colors } from "../../theme";
 import { PixelImage } from "../PixelImage";
 import { CharacterSprite } from "./CharacterSprite";
 import { FurniturePiece, FLOOR_RATIO } from "./FurniturePiece";
+import { UnpackingMiniGame } from "./UnpackingMiniGame";
 
 type Actor = {
   characterId: CharacterId;
@@ -176,6 +177,7 @@ export function RoomStage({
   const [dragKind, setDragKind] = useState<"furniture" | "window" | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
   const [panLocked, setPanLocked] = useState(false);
+  const [unpackingFurniture, setUnpackingFurniture] = useState<PlacedFurniture | null>(null);
 
   const dragOrigin = useRef<{ gx: number; gy: number } | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
@@ -309,6 +311,27 @@ export function RoomStage({
   onVisibleUserKeysRef.current = onVisibleUserKeys;
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastVisibleKey = useRef("");
+
+  function handleTapPacked(item: PlacedFurniture) {
+    if (editing) return;
+    setUnpackingFurniture(item);
+  }
+
+  function handleUnpackComplete() {
+    if (!unpackingFurniture) return;
+    onChangeDocument({
+      ...document,
+      furniture: document.furniture.map((p) =>
+        p.id === unpackingFurniture.id ? { ...p, packed: false } : p,
+      ),
+    });
+    setUnpackingFurniture(null);
+    onStatus("Furniture unpacked!");
+  }
+
+  function handleUnpackCancel() {
+    setUnpackingFurniture(null);
+  }
 
   function characterContentBounds(
     logicalX: number,
@@ -725,6 +748,7 @@ export function RoomStage({
         gx,
         gy,
         anchor,
+        packed: true,
       };
       onChangeInvRef.current(nextInv);
       onChangeDocRef.current({
@@ -732,7 +756,7 @@ export function RoomStage({
         furniture: [...docRef.current.furniture, next],
       });
       onSelectRef.current(next.id);
-      onStatusRef.current(`Placed ${meta.label}`);
+      onStatusRef.current(`Placed ${meta.label} (tap to unpack)`);
       return "done";
     }
 
@@ -1086,6 +1110,8 @@ export function RoomStage({
                   dragOffset={
                     dragKind === "furniture" && dragId === item.id ? dragOffset : null
                   }
+                  onTapPacked={handleTapPacked}
+                  editing={editing}
                 />
               ))
             : null}
@@ -1166,6 +1192,13 @@ export function RoomStage({
           <Text style={styles.plusBtnLabel}>{expandCost}c</Text>
         </Pressable>
       ) : null}
+
+      <UnpackingMiniGame
+        visible={unpackingFurniture != null}
+        furniture={unpackingFurniture}
+        onComplete={handleUnpackComplete}
+        onCancel={handleUnpackCancel}
+      />
     </View>
   );
 }

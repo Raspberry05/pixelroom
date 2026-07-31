@@ -17,6 +17,10 @@ type Props = {
   selected?: boolean;
   /** When dragging, optional live override in pixels. */
   dragOffset?: { x: number; y: number } | null;
+  /** Called when user taps a packed furniture box (only in non-edit mode). */
+  onTapPacked?: (item: PlacedFurniture) => void;
+  /** Whether we're in editing mode (disables tap for unpacking). */
+  editing?: boolean;
 };
 
 /**
@@ -28,10 +32,13 @@ export function FurniturePiece({
   cellPx,
   selected,
   dragOffset,
+  onTapPacked,
+  editing,
 }: Props) {
   const meta = SPRITE_BY_ID[item.sprite];
   if (!meta) return null;
 
+  const isPacked = item.packed === true;
   const { w: drawnW, h: drawnH } = drawnSize(item.sprite, cellPx);
   const floorH = stageHeight * FLOOR_RATIO;
   // Match character front depth so furniture lives in the visible floor band.
@@ -52,8 +59,22 @@ export function FurniturePiece({
     bottom -= dragOffset.y;
   }
 
+  const content = isPacked ? (
+    <View style={styles.box}>
+      <View style={styles.boxTop} />
+      <View style={styles.boxLabel}>
+        <View style={styles.boxLabelLine} />
+        <View style={styles.boxLabelLine} />
+      </View>
+    </View>
+  ) : (
+    <PixelImage source={meta.source} width={drawnW} height={drawnH} />
+  );
+
+  const Wrapper = isPacked && !editing ? Pressable : View;
+
   return (
-    <View
+    <Wrapper
       style={[
         styles.piece,
         {
@@ -64,10 +85,12 @@ export function FurniturePiece({
           zIndex: item.anchor === "wall" ? 4 : 10 + item.gy,
         },
         selected && styles.selected,
+        isPacked && styles.packed,
       ]}
+      onPress={isPacked && !editing ? () => onTapPacked?.(item) : undefined}
     >
-      <PixelImage source={meta.source} width={drawnW} height={drawnH} />
-    </View>
+      {content}
+    </Wrapper>
   );
 }
 
@@ -79,5 +102,37 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.accent,
     backgroundColor: "rgba(61, 107, 72, 0.12)",
+  },
+  packed: {
+    cursor: "pointer",
+  },
+  box: {
+    flex: 1,
+    backgroundColor: "#C19A6B",
+    borderWidth: 2,
+    borderColor: "#8B6F47",
+    borderRadius: 3,
+    padding: 4,
+    justifyContent: "space-between",
+  },
+  boxTop: {
+    height: "30%",
+    backgroundColor: "#A67C52",
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: "#8B6F47",
+  },
+  boxLabel: {
+    height: "25%",
+    backgroundColor: "#FAEBD7",
+    borderRadius: 2,
+    padding: 2,
+    justifyContent: "center",
+    gap: 2,
+  },
+  boxLabelLine: {
+    height: 2,
+    backgroundColor: "#8B6F47",
+    borderRadius: 1,
   },
 });
