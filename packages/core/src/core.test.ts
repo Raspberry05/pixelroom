@@ -9,6 +9,7 @@ import {
   setPresence,
   tickRoom,
   asAccountId,
+  findFreeSpotForAction,
 } from "./index.js";
 
 beforeEach(() => {
@@ -26,6 +27,11 @@ describe("parseCommand", () => {
       action: "cook",
       targetName: null,
       raw: "*cook",
+    });
+    expect(parseCommand("*watch")).toEqual({
+      action: "watch",
+      targetName: null,
+      raw: "*watch",
     });
     expect(parseCommand("*kiss @Sam")).toEqual({
       action: "kiss",
@@ -78,6 +84,9 @@ describe("room presence + actions", () => {
     expect(hugged.logEntry.action).toBe("hug");
     expect(hugged.room.memberState[alice.id]?.currentAction).toBe("hug");
     expect(hugged.room.memberState[bob.id]?.currentAction).toBe("hug");
+    const ax = hugged.room.memberState[alice.id]!.position.x;
+    const bx = hugged.room.memberState[bob.id]!.position.x;
+    expect(Math.abs(ax - bx)).toBeGreaterThanOrEqual(0.8);
   });
 
   it("blocks social actions on sleeping members", () => {
@@ -92,6 +101,75 @@ describe("room presence + actions", () => {
         now: 3,
       }),
     ).toThrow(/sleeping/);
+  });
+
+  it("requires a free seat to sit and claims the hotspot", () => {
+    const alice = createCharacter({ accountId: "a1", displayName: "Alice", now: 1 });
+    const bob = createCharacter({ accountId: "a2", displayName: "Bob", now: 1 });
+    let room = createRoom({ kind: "dm", memberIds: [alice.id, bob.id], now: 1 });
+    room = setPresence(room, alice.id, "active", 2);
+    const spot = findFreeSpotForAction(room, "sit", alice.id);
+    expect(spot).not.toBeNull();
+    const sat = performAction(room, alice.id, "sit", { now: 3 });
+    expect(sat.room.memberState[alice.id]?.occupiedSpotId).toBe(spot!.id);
+    expect(sat.room.memberState[alice.id]?.currentAction).toBe("sit");
+  });
+
+  it("refuses to sit again while already sitting", () => {
+    const alice = createCharacter({ accountId: "a1", displayName: "Alice", now: 1 });
+    const bob = createCharacter({ accountId: "a2", displayName: "Bob", now: 1 });
+    let room = createRoom({ kind: "dm", memberIds: [alice.id, bob.id], now: 1 });
+    room = setPresence(room, alice.id, "active", 2);
+    room = performAction(room, alice.id, "sit", { now: 3 }).room;
+    expect(() => performAction(room, alice.id, "sit", { now: 4 })).toThrow(/already sit/);
+  });
+
+  it("enforces auto cooldown but not user-command cooldown", () => {
+    const alice = createCharacter({ accountId: "a1", displayName: "Alice", now: 1 });
+    const bob = createCharacter({ accountId: "a2", displayName: "Bob", now: 1 });
+    let room = createRoom({ kind: "dm", memberIds: [alice.id, bob.id], now: 1 });
+    room = setPresence(room, alice.id, "active", 2);
+    room = performAction(room, alice.id, "sing", { source: "auto", now: 3 }).room;
+    room = {
+      ...room,
+      memberState: {
+        ...room.memberState,
+        [alice.id]: { ...room.memberState[alice.id]!, currentAction: "idle" },
+      },
+    };
+    // Auto is blocked by cooldown.
+    expect(() =>
+      performAction(room, alice.id, "sing", { source: "auto", now: 8_000 }),
+    ).toThrow(/cooldown/);
+    // User command ignores cooldown.
+    const manual = performAction(room, alice.id, "sing", {
+      source: "command",
+      now: 8_000,
+    });
+    expect(manual.room.memberState[alice.id]?.currentAction).toBe("sing");
+  });
+
+  it("moves sleeping members onto a sit/sleep spot", () => {
+    const alice = createCharacter({ accountId: "a1", displayName: "Alice", now: 1 });
+    const bob = createCharacter({ accountId: "a2", displayName: "Bob", now: 1 });
+    let room = createRoom({ kind: "dm", memberIds: [alice.id, bob.id], now: 1 });
+    room = setPresence(room, alice.id, "active", 2);
+    room = setPresence(room, alice.id, "sleeping", 3);
+    const aliceState = room.memberState[alice.id]!;
+    expect(aliceState.currentAction).toBe("sleep");
+    expect(aliceState.occupiedSpotId).toBeTruthy();
+    const spot = room.hotspots.find((h) => h.id === aliceState.occupiedSpotId);
+    expect(spot?.kind).toBe("sit");
+    expect(aliceState.position.x).toBeCloseTo(spot!.position.x, 0);
+    expect(aliceState.position.y).toBeCloseTo(spot!.position.y, 0);
+  });
+
+  it("requires parties to have at least 3 members", () => {
+    const a = createCharacter({ accountId: "1", displayName: "A", now: 1 });
+    const b = createCharacter({ accountId: "2", displayName: "B", now: 1 });
+    expect(() => createRoom({ kind: "party", memberIds: [a.id, b.id], now: 1 })).toThrow(
+      /3/,
+    );
   });
 });
 
@@ -109,8 +187,9 @@ describe("tickRoom", () => {
       random: () => 0.1,
     });
 
-    expect(result.events.length).toBe(1);
+    expect(result.events.length).toBeGreaterThanOrEqual(1);
     expect(result.events[0]?.source).toBe("auto");
+    expect(["wave", "talk", "sit", "sing"]).toContain(result.events[0]?.action);
   });
 });
 

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pixelroom atlas slicer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #121412;
+        color: #e8efe8;
+      }
+      header {
+        padding: 12px 16px;
+        border-bottom: 1px solid #2a332a;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        min-height: calc(100vh - 58px);
+      }
+      #stageWrap {
+        overflow: auto;
+        background: #0b0d0b;
+        padding: 16px;
+      }
+      #stage {
+        position: relative;
+        display: inline-block;
+        image-rendering: pixelated;
+        cursor: crosshair;
+        background-image: linear-gradient(45deg, #1a1f1a 25%, transparent 25%),
+          linear-gradient(-45deg, #1a1f1a 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, #1a1f1a 75%),
+          linear-gradient(-45deg, transparent 75%, #1a1f1a 75%);
+        background-size: 16px 16px;
+        background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      }
+      #atlas {
+        display: block;
+        image-rendering: pixelated;
+      }
+      .box {
+        position: absolute;
+        border: 1px solid #5ad67d;
+        background: rgba(90, 214, 125, 0.18);
+        box-sizing: border-box;
+        pointer-events: none;
+      }
+      .box.active {
+        border-color: #ffd166;
+        background: rgba(255, 209, 102, 0.22);
+      }
+      aside {
+        border-left: 1px solid #2a332a;
+        padding: 12px;
+        overflow: auto;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: #9aab9a;
+        margin-top: 10px;
+      }
+      input,
+      select,
+      button,
+      textarea {
+        width: 100%;
+        margin-top: 4px;
+        box-sizing: border-box;
+        border-radius: 8px;
+        border: 1px solid #3a463a;
+        background: #1a211a;
+        color: inherit;
+        padding: 8px;
+      }
+      button {
+        cursor: pointer;
+        background: #2f6f55;
+        border-color: #1a221c;
+        font-weight: 700;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .hint {
+        font-size: 12px;
+        color: #8a9a8e;
+        line-height: 1.4;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 12px 0 0;
+      }
+      li {
+        padding: 8px;
+        border: 1px solid #2a332a;
+        border-radius: 8px;
+        margin-bottom: 6px;
+        cursor: pointer;
+      }
+      li.active {
+        border-color: #ffd166;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Atlas slicer</strong>
+      <input id="file" type="file" accept="image/png" style="width: auto" />
+      <label style="margin: 0; display: flex; gap: 6px; align-items: center; width: auto">
+        Zoom
+        <input id="zoom" type="range" min="2" max="16" value="4" style="width: 120px" />
+        <span id="zoomVal">4×</span>
+      </label>
+      <button id="exportJson" style="width: auto">Copy JSON slices</button>
+      <button id="exportPngs" style="width: auto">Download selected PNG</button>
+    </header>
+    <main>
+      <div id="stageWrap">
+        <div id="stage">
+          <img id="atlas" alt="atlas" />
+        </div>
+        <p class="hint" style="padding: 8px 0">
+          Drag on the image to mark a sprite. Name it on the right, then download or copy JSON.
+          Tip: start from <code>apps/mobile/assets/interior/interior_free.png</code>.
+        </p>
+      </div>
+      <aside>
+        <p class="hint">
+          Best workflow: draw one sprite at a time → name it → Download PNG → paste JSON into
+          <code>scripts/slice_interior_atlas.py</code> or <code>atlas_slices.json</code>.
+        </p>
+        <label>Name</label>
+        <input id="name" placeholder="chair_down" />
+        <div class="row">
+          <div>
+            <label>x</label>
+            <input id="x" type="number" />
+          </div>
+          <div>
+            <label>y</label>
+            <input id="y" type="number" />
+          </div>
+          <div>
+            <label>w</label>
+            <input id="w" type="number" />
+          </div>
+          <div>
+            <label>h</label>
+            <input id="h" type="number" />
+          </div>
+        </div>
+        <button id="save" style="margin-top: 12px">Save / update slice</button>
+        <button id="remove" style="margin-top: 8px; background: #6b3030">Remove selected</button>
+        <label>JSON</label>
+        <textarea id="json" rows="12" readonly></textarea>
+        <ul id="list"></ul>
+      </aside>
+    </main>
+    <script>
+      const state = {
+        zoom: 4,
+        slices: {},
+        active: null,
+        drag: null,
+        img: null,
+      };
+
+      const atlas = document.getElementById("atlas");
+      const stage = document.getElementById("stage");
+      const zoom = document.getElementById("zoom");
+      const zoomVal = document.getElementById("zoomVal");
+      const list = document.getElementById("list");
+      const jsonOut = document.getElementById("json");
+
+      function refreshJson() {
+        jsonOut.value = JSON.stringify({ slices: state.slices }, null, 2);
+      }
+
+      function clearBoxes() {
+        [...stage.querySelectorAll(".box")].forEach((n) => n.remove());
+      }
+
+      function renderBoxes() {
+        clearBoxes();
+        for (const [name, s] of Object.entries(state.slices)) {
+          const el = document.createElement("div");
+          el.className = "box" + (name === state.active ? " active" : "");
+          el.style.left = s.x * state.zoom + "px";
+          el.style.top = s.y * state.zoom + "px";
+          el.style.width = s.w * state.zoom + "px";
+          el.style.height = s.h * state.zoom + "px";
+          el.title = name;
+          stage.appendChild(el);
+        }
+        list.innerHTML = "";
+        for (const [name, s] of Object.entries(state.slices)) {
+          const li = document.createElement("li");
+          li.className = name === state.active ? "active" : "";
+          li.textContent = `${name}  ${s.w}×${s.h} @ (${s.x},${s.y})`;
+          li.onclick = () => {
+            state.active = name;
+            document.getElementById("name").value = name;
+            document.getElementById("x").value = s.x;
+            document.getElementById("y").value = s.y;
+            document.getElementById("w").value = s.w;
+            document.getElementById("h").value = s.h;
+            renderBoxes();
+          };
+          list.appendChild(li);
+        }
+        refreshJson();
+      }
+
+      function atlasPos(evt) {
+        const rect = atlas.getBoundingClientRect();
+        const x = Math.max(0, Math.floor((evt.clientX - rect.left) / state.zoom));
+        const y = Math.max(0, Math.floor((evt.clientY - rect.top) / state.zoom));
+        return { x, y };
+      }
+
+      atlas.addEventListener("mousedown", (evt) => {
+        if (!state.img) return;
+        const p = atlasPos(evt);
+        state.drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      });
+      window.addEventListener("mousemove", (evt) => {
+        if (!state.drag) return;
+        const p = atlasPos(evt);
+        state.drag.x1 = p.x;
+        state.drag.y1 = p.y;
+        const x = Math.min(state.drag.x0, state.drag.x1);
+        const y = Math.min(state.drag.y0, state.drag.y1);
+        const w = Math.abs(state.drag.x1 - state.drag.x0) + 1;
+        const h = Math.abs(state.drag.y1 - state.drag.y0) + 1;
+        document.getElementById("x").value = x;
+        document.getElementById("y").value = y;
+        document.getElementById("w").value = w;
+        document.getElementById("h").value = h;
+      });
+      window.addEventListener("mouseup", () => {
+        state.drag = null;
+      });
+
+      document.getElementById("file").onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        atlas.src = url;
+        atlas.onload = () => {
+          state.img = atlas;
+          atlas.style.width = atlas.naturalWidth * state.zoom + "px";
+          atlas.style.height = atlas.naturalHeight * state.zoom + "px";
+        };
+      };
+
+      zoom.oninput = () => {
+        state.zoom = Number(zoom.value);
+        zoomVal.textContent = state.zoom + "×";
+        if (atlas.naturalWidth) {
+          atlas.style.width = atlas.naturalWidth * state.zoom + "px";
+          atlas.style.height = atlas.naturalHeight * state.zoom + "px";
+        }
+        renderBoxes();
+      };
+
+      document.getElementById("save").onclick = () => {
+        const name = document.getElementById("name").value.trim();
+        if (!name) return alert("Name the slice");
+        state.slices[name] = {
+          x: Number(document.getElementById("x").value) || 0,
+          y: Number(document.getElementById("y").value) || 0,
+          w: Number(document.getElementById("w").value) || 1,
+          h: Number(document.getElementById("h").value) || 1,
+        };
+        state.active = name;
+        renderBoxes();
+      };
+
+      document.getElementById("remove").onclick = () => {
+        if (!state.active) return;
+        delete state.slices[state.active];
+        state.active = null;
+        renderBoxes();
+      };
+
+      document.getElementById("exportJson").onclick = async () => {
+        await navigator.clipboard.writeText(jsonOut.value);
+        alert("JSON copied");
+      };
+
+      document.getElementById("exportPngs").onclick = () => {
+        if (!state.active || !atlas.naturalWidth) return alert("Select a slice first");
+        const s = state.slices[state.active];
+        const canvas = document.createElement("canvas");
+        canvas.width = s.w;
+        canvas.height = s.h;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(atlas, s.x, s.y, s.w, s.h, 0, 0, s.w, s.h);
+        const a = document.createElement("a");
+        a.href = canvas.toDataURL("image/png");
+        a.download = state.active + ".png";
+        a.click();
+      };
+    </script>
+  </body>
+</html>

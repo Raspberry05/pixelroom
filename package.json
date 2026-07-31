@@ -11,7 +11,13 @@
     "build": "npm run build -w @pixelroom/core -w @pixelroom/crypto",
     "test": "npm run test -w @pixelroom/core -w @pixelroom/crypto",
     "typecheck": "npm run typecheck -w @pixelroom/core -w @pixelroom/crypto -w @pixelroom/mobile",
-    "lint": "npm run typecheck"
+    "lint": "npm run typecheck",
+    "sync": "npm run start -w @pixelroom/sync-server",
+    "web": "npm run web -w @pixelroom/mobile",
+    "demo:duo": "concurrently -k -n sync,web -c green,cyan \"npm run sync\" \"npm run web\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
   },
   "engines": {
     "node": ">=20"

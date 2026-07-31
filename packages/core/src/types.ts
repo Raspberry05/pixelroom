@@ -1,3 +1,5 @@
+import type { RoomHotspot, RoomStyleId } from "./layout.js";
+
 /** Unique opaque IDs used across the domain. */
 export type CharacterId = string & { readonly __brand: "CharacterId" };
 export type RoomId = string & { readonly __brand: "RoomId" };
@@ -22,11 +24,20 @@ export function asMessageId(value: string): MessageId {
 
 export type PresenceState = "active" | "away" | "sleeping";
 
-export type RoomKind = "dm" | "group";
+/** DM = 2 people. Party = 3+ people (shared room style via admins). */
+export type RoomKind = "dm" | "party";
+
+/** cozy = layered char-free kit; sheet = full-body walk sheet preset. */
+export type AppearanceKit = "cozy" | "sheet";
 
 export type Appearance = {
+  kit: AppearanceKit;
+  /** Sheet preset id when kit is `sheet` (e.g. "50"). */
+  sheetId: string;
   hair: string;
   outfit: string;
+  /** Cozy pants variant: blue | purple | none */
+  pants: string;
   skin: string;
   accessory: string | null;
 };
@@ -55,7 +66,9 @@ export type ActionKind =
   | "wave"
   | "talk"
   | "sit"
-  | "dance";
+  | "dance"
+  | "sing"
+  | "watch";
 
 export type RoomMemberState = {
   characterId: CharacterId;
@@ -64,6 +77,8 @@ export type RoomMemberState = {
   facing: "left" | "right";
   currentAction: ActionKind;
   actionTargetId: CharacterId | null;
+  /** Hotspot currently claimed (sit / cook / clean). */
+  occupiedSpotId: string | null;
   lastActiveAt: number;
 };
 
@@ -74,6 +89,7 @@ export type RoomActionLogEntry = {
   action: ActionKind;
   targetId: CharacterId | null;
   source: "command" | "auto" | "presence";
+  spotId?: string | null;
 };
 
 export type Room = {
@@ -81,6 +97,11 @@ export type Room = {
   kind: RoomKind;
   name: string | null;
   memberIds: CharacterId[];
+  /** Party admins who may change the shared room style. */
+  adminIds: CharacterId[];
+  /** Shared style (party). DM clients may override locally. */
+  styleId: RoomStyleId;
+  hotspots: RoomHotspot[];
   memberState: Record<string, RoomMemberState>;
   actionLog: RoomActionLogEntry[];
   createdAt: number;

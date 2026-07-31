@@ -1,270 +1,446 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Platform, SafeAreaView, StyleSheet, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { useMemo, useState } from "react";
 import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-import {
-  createCharacter,
-  createRoom,
-  createTextMessage,
-  parseCommand,
-  performAction,
-  setPresence,
-  tickRoom,
-  type Character,
-  type Room,
-  type RoomActionLogEntry,
+  asRoomId,
+  type Appearance,
+  type RoomId,
+  type RoomStyleId,
 } from "@pixelroom/core";
+import { BottomTabs } from "./components/BottomTabs";
+import { MessageToast, type AppToast } from "./components/MessageToast";
+import { NewChatSheet } from "./components/NewChatSheet";
+import {
+  DEMO_USERS,
+  contactsFor,
+  getPeerKey,
+  initialConversations,
+  resolveDemoUser,
+  type Contact,
+  type ConversationPreview,
+  type DemoUser,
+  type DemoUserKey,
+} from "./data/seed";
+import {
+  consumePlacedFromInventory,
+  createStarterInventory,
+  type InventoryState,
+} from "./data/inventory";
+import { initialNav, type StackScreen } from "./navigation/types";
+import { HallwayScreen } from "./screens/HallwayScreen";
+import { NewContactScreen } from "./screens/NewContactScreen";
+import { NewPartyScreen } from "./screens/NewPartyScreen";
+import { ProfileDetailScreen } from "./screens/ProfileDetailScreen";
+import { RoomScreen } from "./screens/RoomScreen";
+import { StoreScreen, loadCoins, saveCoins } from "./screens/StoreScreen";
+import { YouScreen } from "./screens/YouScreen";
+import { usePixelSync } from "./sync/client";
+import { colors } from "./theme";
 
-/**
- * Logic playground shell — pixel art / polished UI comes later.
- * Demonstrates presence, commands, and simulation ticks on-device.
- */
+const INV_KEY = "pixelroom.inventory.v4";
+
+function loadInventory(): InventoryState {
+  if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+    try {
+      const raw = localStorage.getItem(INV_KEY);
+      if (raw) return JSON.parse(raw) as InventoryState;
+    } catch {
+      // ignore
+    }
+  }
+  // Fresh starter stock; default room only uses one window.
+  return consumePlacedFromInventory(createStarterInventory(), [], 1);
+}
+
+function saveInventory(inv: InventoryState) {
+  if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+    try {
+      localStorage.setItem(INV_KEY, JSON.stringify(inv));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function ensureSharpPixelsOnWeb() {
+  if (Platform.OS !== "web" || typeof document === "undefined") return;
+  const id = "pixelroom-sharp-pixels";
+  if (document.getElementById(id)) return;
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = `
+    img, canvas {
+      image-rendering: pixelated !important;
+      image-rendering: crisp-edges !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function readUserKey(): DemoUserKey {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    const param = new URLSearchParams(window.location.search).get("user");
+    return resolveDemoUser(param);
+  }
+  return "alice";
+}
+
 export default function App() {
-  const [alice] = useState<Character>(() =>
-    createCharacter({ accountId: "local-alice", displayName: "Alice" }),
+  useEffect(() => {
+    ensureSharpPixelsOnWeb();
+  }, []);
+
+  const userKey = useMemo(() => readUserKey(), []);
+  const [self, setSelf] = useState<DemoUser>(() => DEMO_USERS[userKey]);
+  const [contacts, setContacts] = useState<Contact[]>(() => contactsFor(userKey));
+  const [conversations, setConversations] = useState<ConversationPreview[]>(() =>
+    initialConversations(userKey),
   );
-  const [bob] = useState<Character>(() =>
-    createCharacter({ accountId: "local-bob", displayName: "Bob" }),
-  );
-  const [room, setRoom] = useState<Room>(() => {
-    let next = createRoom({ kind: "dm", memberIds: [alice.id, bob.id] });
-    next = setPresence(next, alice.id, "active");
-    next = setPresence(next, bob.id, "active");
-    return next;
-  });
-  const [draft, setDraft] = useState("");
-  const [feed, setFeed] = useState<string[]>(["Both active in the room. Try *hug Bob or *cook"]);
-
-  const charactersById = useMemo(
-    () =>
-      new Map<Character["id"], Character>([
-        [alice.id, alice],
-        [bob.id, bob],
-      ]),
-    [alice, bob],
-  );
-
-  const memberLines = Object.values(room.memberState).map((m) => {
-    const name = charactersById.get(m.characterId)?.displayName ?? m.characterId;
-    return `${name}: ${m.presence} · ${m.currentAction} @ (${m.position.x},${m.position.y})`;
-  });
-
-  function pushFeed(line: string) {
-    setFeed((prev) => [line, ...prev].slice(0, 40));
-  }
-
-  function formatLog(entry: RoomActionLogEntry): string {
-    const actor = charactersById.get(entry.actorId)?.displayName ?? "???";
-    const target = entry.targetId
-      ? charactersById.get(entry.targetId)?.displayName
-      : null;
-    const suffix = target ? ` → ${target}` : "";
-    return `[${entry.source}] ${actor} *${entry.action}${suffix}`;
-  }
-
-  function onSend() {
-    const text = draft.trim();
-    if (!text) return;
-
-    const command = parseCommand(text);
-    if (command) {
+  const [nav, setNav] = useState(initialNav);
+  const [inventory, setInventory] = useState<InventoryState>(() => loadInventory());
+  const [coins, setCoins] = useState(() => loadCoins(500));
+  const [ownedClothes, setOwnedClothes] = useState<string[]>(() => {
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
       try {
-        const result = performAction(room, alice.id, command.action, {
-          targetName: command.targetName,
-          charactersById,
-          source: "command",
-        });
-        setRoom(result.room);
-        pushFeed(formatLog(result.logEntry));
-      } catch (error) {
-        pushFeed(error instanceof Error ? error.message : "action failed");
+        const raw = localStorage.getItem("pixelroom.clothes.v1");
+        if (raw) return JSON.parse(raw) as string[];
+      } catch {
+        // ignore
       }
-    } else {
-      const msg = createTextMessage({
-        roomId: room.id,
-        senderId: alice.id,
-        text,
-      });
-      pushFeed(`Alice: ${msg.text}`);
     }
-    setDraft("");
-  }
+    return ["cloth_red_tee", "cloth_blue_pants"];
+  });
+  const [toast, setToast] = useState<AppToast | null>(null);
+  const lastToastMsgId = useRef<string | null>(null);
+  const dismissToast = useCallback(() => setToast(null), []);
+  const sync = usePixelSync(userKey);
 
-  function onTick() {
-    const result = tickRoom(room, {
-      config: { autoInteractChance: 0.8, maxAutoInteractions: 1 },
+  useEffect(() => {
+    saveInventory(inventory);
+  }, [inventory]);
+
+  useEffect(() => {
+    saveCoins(coins);
+  }, [coins]);
+
+  useEffect(() => {
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+      try {
+        localStorage.setItem("pixelroom.clothes.v1", JSON.stringify(ownedClothes));
+      } catch {
+        // ignore
+      }
+    }
+  }, [ownedClothes]);
+
+  const top = nav.stack[nav.stack.length - 1] ?? { name: "tabs" as const };
+  const selfCharacterId = DEMO_USERS[userKey].character.id;
+  const activeRoomId = top.name === "room" ? String(top.roomId) : null;
+
+  useEffect(() => {
+    const last = sync.messages[sync.messages.length - 1];
+    if (!last || last.kind === "system") return;
+    if (last.senderKey === userKey) return;
+    if (lastToastMsgId.current === last.id) return;
+    lastToastMsgId.current = last.id;
+    // In the active room, the in-room HUD / head bubbles cover it.
+    if (activeRoomId && String(last.roomId) === activeRoomId) return;
+    setToast({
+      id: last.id,
+      title: last.senderName,
+      body: last.text,
+      roomId: last.roomId,
     });
-    setRoom(result.room);
-    if (result.events.length === 0) {
-      pushFeed("tick: wandered / idle");
-    } else {
-      for (const event of result.events) {
-        pushFeed(formatLog(event));
-      }
-    }
+  }, [sync.messages, activeRoomId, userKey]);
+
+  function push(screen: StackScreen) {
+    setNav((prev) => ({ ...prev, stack: [...prev.stack, screen], sheetOpen: false }));
   }
 
-  function toggleBob() {
-    const bobState = room.memberState[String(bob.id)];
-    const nextPresence = bobState?.presence === "active" ? "sleeping" : "active";
-    const next = setPresence(room, bob.id, nextPresence);
-    setRoom(next);
-    pushFeed(`Bob is now ${nextPresence}`);
+  function pop() {
+    setNav((prev) => ({
+      ...prev,
+      stack: prev.stack.length > 1 ? prev.stack.slice(0, -1) : prev.stack,
+    }));
+  }
+
+  function openRoom(roomId: RoomId) {
+    push({ name: "room", roomId });
+  }
+
+  function onSelectContact(contact: Contact) {
+    const existing = conversations.find(
+      (c) => c.kind === "dm" && c.title === contact.displayName,
+    );
+    if (existing) {
+      openRoom(existing.roomId);
+      return;
+    }
+    if (contact.userKey === "alice" || contact.userKey === "bob") {
+      openRoom(asRoomId("dm:alice:bob"));
+      return;
+    }
+    const roomId = asRoomId(`dm:local:${contact.characterId}`);
+    setConversations((prev) => [
+      {
+        roomId,
+        kind: "dm",
+        title: contact.displayName,
+        preview: "Say hi",
+        updatedAt: Date.now(),
+        personalStyleId: "garden",
+      },
+      ...prev,
+    ]);
+    openRoom(roomId);
+  }
+
+  function setPersonalStyle(roomId: RoomId, styleId: RoomStyleId) {
+    setConversations((prev) =>
+      prev.map((c) =>
+        String(c.roomId) === String(roomId) ? { ...c, personalStyleId: styleId } : c,
+      ),
+    );
+  }
+
+  const syncLabel =
+    sync.status === "open"
+      ? `online as ${self.character.displayName}`
+      : sync.status === "connecting"
+        ? "connecting…"
+        : "offline · retrying";
+
+  let body: ReactNode = null;
+
+  if (top.name === "room") {
+    const convo = conversations.find((c) => String(c.roomId) === String(top.roomId));
+    const styleId =
+      convo?.kind === "dm"
+        ? (convo.personalStyleId ?? sync.room.styleId)
+        : sync.room.styleId;
+    body = (
+      <RoomScreen
+        roomId={top.roomId}
+        selfKey={userKey}
+        selfAppearance={self.character.appearance}
+        title={convo?.title ?? "Room"}
+        room={sync.room}
+        messages={sync.messages}
+        inventory={inventory}
+        onChangeInventory={setInventory}
+        coins={coins}
+        onChangeCoins={setCoins}
+        styleId={styleId}
+        onBack={pop}
+        onOpenProfile={() =>
+          push({
+            name: "profile",
+            userKey: convo?.peerUserKey ?? getPeerKey(userKey),
+            roomId: top.roomId,
+          })
+        }
+        onJoin={() => sync.joinRoom(String(top.roomId))}
+        onLeave={() => sync.leaveRoom(String(top.roomId))}
+        onSendChat={(text) => {
+          sync.sendChat(String(top.roomId), text);
+          setConversations((prev) =>
+            prev.map((c) =>
+              String(c.roomId) === String(top.roomId)
+                ? { ...c, preview: text, updatedAt: Date.now() }
+                : c,
+            ),
+          );
+        }}
+        onSendAction={(action, targetName) =>
+          sync.sendAction(String(top.roomId), action, targetName)
+        }
+        syncedLayout={sync.layout}
+        onPublishLayout={(document) =>
+          sync.sendRoomLayout(String(top.roomId), document)
+        }
+        onMoveSelf={(x) => sync.sendPosition(String(top.roomId), x)}
+        onTyping={(isTyping) => sync.sendTyping(String(top.roomId), isTyping)}
+        peerTyping={(() => {
+          const peerKey = (
+            Object.entries(sync.peerTyping) as [DemoUserKey, boolean][]
+          ).find(([key, on]) => on && key !== userKey)?.[0];
+          return peerKey
+            ? {
+                userKey: peerKey,
+                name: DEMO_USERS[peerKey].character.displayName,
+              }
+            : null;
+        })()}
+      />
+    );
+  } else if (top.name === "profile") {
+    const convo = conversations.find(
+      (c) => top.roomId && String(c.roomId) === String(top.roomId),
+    );
+    const roomKind = convo?.kind ?? (sync.room.kind === "party" ? "party" : "dm");
+    const canEditShared =
+      roomKind === "dm" ||
+      sync.room.adminIds.some((id) => id === selfCharacterId);
+    const activeStyleId =
+      roomKind === "dm"
+        ? (convo?.personalStyleId ?? sync.room.styleId)
+        : sync.room.styleId;
+
+    body = (
+      <ProfileDetailScreen
+        userKey={top.userKey}
+        roomKind={roomKind}
+        activeStyleId={activeStyleId}
+        canEditSharedStyle={canEditShared}
+        onBack={pop}
+        onSelectStyle={(styleId) => {
+          if (roomKind === "dm" && top.roomId) {
+            setPersonalStyle(top.roomId, styleId);
+          } else if (top.roomId) {
+            sync.sendRoomStyle(String(top.roomId), styleId);
+          }
+        }}
+      />
+    );
+  } else if (top.name === "newContact") {
+    body = (
+      <NewContactScreen
+        onBack={pop}
+        onSave={(contact) => {
+          setContacts((prev) => [contact, ...prev]);
+          pop();
+        }}
+      />
+    );
+  } else if (top.name === "newParty") {
+    body = (
+      <NewPartyScreen
+        contacts={contacts}
+        onBack={pop}
+        onCreate={(name, memberIds) => {
+          const roomId = asRoomId(`party:${Date.now()}`);
+          setConversations((prev) => [
+            {
+              roomId,
+              kind: "party",
+              title: name,
+              preview: `Party · ${memberIds.length + 1} people`,
+              updatedAt: Date.now(),
+            },
+            ...prev,
+          ]);
+          pop();
+          openRoom(roomId);
+        }}
+      />
+    );
+  } else {
+    body = (
+      <View style={styles.flex}>
+        <View style={styles.flex}>
+          {nav.tab === "hallway" ? (
+            <HallwayScreen
+              conversations={conversations}
+              syncLabel={syncLabel}
+              onOpenRoom={openRoom}
+              onOpenNew={() => setNav((prev) => ({ ...prev, sheetOpen: true }))}
+            />
+          ) : null}
+          {nav.tab === "you" ? (
+            <YouScreen
+              user={self}
+              onChangeName={(displayName) =>
+                setSelf((prev) => ({
+                  ...prev,
+                  character: { ...prev.character, displayName },
+                }))
+              }
+              onChangeAppearance={(patch: Partial<Appearance>) =>
+                setSelf((prev) => ({
+                  ...prev,
+                  character: {
+                    ...prev.character,
+                    appearance: { ...prev.character.appearance, ...patch },
+                  },
+                }))
+              }
+            />
+          ) : null}
+          {nav.tab === "store" ? (
+            <StoreScreen
+              inventory={inventory}
+              onChangeInventory={setInventory}
+              coins={coins}
+              onChangeCoins={setCoins}
+              ownedClothes={ownedClothes}
+              onUnlockCloth={(id, patch) => {
+                setOwnedClothes((prev) =>
+                  prev.includes(id) ? prev : [...prev, id],
+                );
+                setSelf((prev) => ({
+                  ...prev,
+                  character: {
+                    ...prev.character,
+                    appearance: { ...prev.character.appearance, ...patch },
+                  },
+                }));
+              }}
+            />
+          ) : null}
+        </View>
+        <BottomTabs
+          active={nav.tab}
+          onChange={(tab) => setNav((prev) => ({ ...prev, tab }))}
+        />
+      </View>
+    );
   }
 
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
-      <View style={styles.header}>
-        <Text style={styles.brand}>Pixelroom</Text>
-        <Text style={styles.sub}>Encrypted room chat — logic preview</Text>
-      </View>
-
-      <View style={styles.roomPanel}>
-        <Text style={styles.panelTitle}>Room</Text>
-        {memberLines.map((line) => (
-          <Text key={line} style={styles.mono}>
-            {line}
-          </Text>
-        ))}
-      </View>
-
-      <View style={styles.row}>
-        <Pressable style={styles.btn} onPress={onTick}>
-          <Text style={styles.btnText}>Sim tick</Text>
-        </Pressable>
-        <Pressable style={styles.btnSecondary} onPress={toggleBob}>
-          <Text style={styles.btnText}>Toggle Bob sleep</Text>
-        </Pressable>
-      </View>
-
-      <ScrollView style={styles.feed} contentContainerStyle={styles.feedContent}>
-        {feed.map((line, index) => (
-          <Text key={`${index}-${line}`} style={styles.feedLine}>
-            {line}
-          </Text>
-        ))}
-      </ScrollView>
-
-      <View style={styles.composer}>
-        <TextInput
-          style={styles.input}
-          value={draft}
-          onChangeText={setDraft}
-          placeholder="Message or *hug Bob"
-          placeholderTextColor="#8a8a8a"
-          onSubmitEditing={onSend}
-          returnKeyType="send"
+      {sync.lastError ? (
+        <PressableBanner message={sync.lastError} onClear={sync.clearError} />
+      ) : null}
+      <View style={styles.flex}>
+        {body}
+        <MessageToast
+          toast={toast}
+          onDismiss={dismissToast}
+          onPress={(item) => {
+            if (item.roomId) openRoom(asRoomId(item.roomId));
+          }}
         />
-        <Pressable style={styles.send} onPress={onSend}>
-          <Text style={styles.btnText}>Send</Text>
-        </Pressable>
       </View>
+      <NewChatSheet
+        visible={nav.sheetOpen}
+        contacts={contacts}
+        onClose={() => setNav((prev) => ({ ...prev, sheetOpen: false }))}
+        onSelectContact={onSelectContact}
+        onAddContact={() => push({ name: "newContact" })}
+        onNewGroup={() => push({ name: "newParty" })}
+      />
     </SafeAreaView>
   );
 }
 
+function PressableBanner({ message, onClear }: { message: string; onClear: () => void }) {
+  return (
+    <View style={styles.banner}>
+      <Text style={styles.bannerText} onPress={onClear}>
+        {message} (tap to dismiss)
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: "#f3f1ec",
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  brand: {
-    fontSize: 28,
-    fontWeight: "700",
-    letterSpacing: -0.5,
-    color: "#141414",
-  },
-  sub: {
-    marginTop: 4,
-    fontSize: 14,
-    color: "#5c5c5c",
-  },
-  roomPanel: {
-    marginHorizontal: 20,
-    padding: 14,
-    backgroundColor: "#e7e2d8",
-    gap: 4,
-  },
-  panelTitle: {
-    fontSize: 12,
-    fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-    color: "#6b6b6b",
-    marginBottom: 4,
-  },
-  mono: {
-    fontSize: 13,
-    color: "#1f1f1f",
-    fontVariant: ["tabular-nums"],
-  },
-  row: {
-    flexDirection: "row",
-    gap: 10,
-    paddingHorizontal: 20,
-    marginTop: 12,
-  },
-  btn: {
-    backgroundColor: "#1f1f1f",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  btnSecondary: {
-    backgroundColor: "#3d3d3d",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  btnText: {
-    color: "#f7f7f7",
-    fontWeight: "600",
-    fontSize: 13,
-  },
-  feed: {
-    flex: 1,
-    marginTop: 12,
-    marginHorizontal: 20,
-  },
-  feedContent: {
-    gap: 8,
-    paddingBottom: 12,
-  },
-  feedLine: {
-    fontSize: 14,
-    color: "#222",
-    lineHeight: 20,
-  },
-  composer: {
-    flexDirection: "row",
-    gap: 8,
-    padding: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#cfc9bd",
-    backgroundColor: "#efebe3",
-  },
-  input: {
-    flex: 1,
-    backgroundColor: "#fff",
+  safe: { flex: 1, backgroundColor: colors.bg },
+  flex: { flex: 1 },
+  banner: {
+    backgroundColor: colors.danger,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: "#111",
+    paddingVertical: 8,
   },
-  send: {
-    backgroundColor: "#1f1f1f",
-    justifyContent: "center",
-    paddingHorizontal: 16,
-  },
+  bannerText: { color: colors.surfaceRaised, fontSize: 12 },
 });

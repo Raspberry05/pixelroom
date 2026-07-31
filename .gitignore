@@ -3,6 +3,7 @@ dist/
 build/
 .expo/
 .expo-shared/
+assets/_incoming/inputprompts/kenney.zip
 *.log
 .DS_Store
 Thumbs.db

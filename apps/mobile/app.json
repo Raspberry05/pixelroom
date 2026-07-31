@@ -13,6 +13,10 @@
     },
     "android": {
       "package": "app.pixelroom.mobile"
+    },
+    "web": {
+      "bundler": "metro",
+      "name": "Pixelroom"
     }
   }
 }

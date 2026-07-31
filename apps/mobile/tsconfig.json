@@ -2,11 +2,7 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "paths": {
-      "@pixelroom/core": ["../../packages/core/src"],
-      "@pixelroom/crypto": ["../../packages/crypto/src"]
-    }
+    "noUncheckedIndexedAccess": true
   },
   "include": ["**/*.ts", "**/*.tsx"]
 }

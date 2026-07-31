@@ -8,8 +8,11 @@ import {
 } from "./types.js";
 
 export const DEFAULT_APPEARANCE: Appearance = {
-  hair: "default",
-  outfit: "starter",
+  kit: "cozy",
+  sheetId: "50",
+  hair: "brown",
+  outfit: "red",
+  pants: "blue",
   skin: "default",
   accessory: null,
 };

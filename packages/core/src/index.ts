@@ -1,5 +1,7 @@
 export * from "./types.js";
 export * from "./actions.js";
+export * from "./layout.js";
+export * from "./hotspots.js";
 export * from "./character.js";
 export * from "./commands.js";
 export * from "./room.js";

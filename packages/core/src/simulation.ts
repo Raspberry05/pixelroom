@@ -1,6 +1,15 @@
-import { AUTO_INTERACTIONS } from "./actions.js";
+import {
+  AUTO_INTERACTIONS,
+  canStartAction,
+  isLocationAction,
+} from "./actions.js";
+import {
+  areNearForConversation,
+  findFreeSpotForAction,
+  separateFromOthers,
+} from "./hotspots.js";
 import { performAction } from "./perform-action.js";
-import { listActiveMembers, withMemberState } from "./room.js";
+import { getMemberState, listActiveMembers, withMemberState } from "./room.js";
 import type { ActionKind, CharacterId, Room, RoomActionLogEntry } from "./types.js";
 
 export type SimulationConfig = {
@@ -8,6 +17,10 @@ export type SimulationConfig = {
   autoInteractChance: number;
   /** Max auto interactions emitted per tick. */
   maxAutoInteractions: number;
+  /** Characters that should not auto-wander this tick (e.g. player-scrolled). */
+  skipWanderIds?: CharacterId[];
+  /** Logical floor width (defaults to home chunk span). */
+  floorMaxX?: number;
 };
 
 export const DEFAULT_SIM_CONFIG: SimulationConfig = {
@@ -45,55 +58,109 @@ function wander(
   characterId: CharacterId,
   rand: () => number,
   now: number,
+  maxX?: number,
 ): Room {
   const member = room.memberState[String(characterId)];
   if (!member || member.presence !== "active") {
+    return room;
+  }
+  // Stay put while occupying a hotspot action
+  if (member.occupiedSpotId && isLocationAction(member.currentAction)) {
     return room;
   }
   if (member.currentAction !== "idle" && member.currentAction !== "walk") {
     return room;
   }
 
-  const dx = rand() < 0.5 ? -1 : 1;
-  const nextX = Math.max(0, Math.min(12, member.position.x + dx));
+  const dirs: Array<[number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [-1, 1],
+    [1, -1],
+    [-1, -1],
+  ];
+  const [dx, dy] = dirs[Math.floor(rand() * dirs.length)]!;
+  const raw = {
+    x: member.position.x + dx * 0.42,
+    y: member.position.y + dy * 0.35,
+  };
+  const nextPos = separateFromOthers(room, characterId, raw, 0.85, maxX);
+  const moved =
+    Math.abs(nextPos.x - member.position.x) > 0.01 ||
+    Math.abs(nextPos.y - member.position.y) > 0.01;
+  if (!moved) {
+    return room;
+  }
   return withMemberState(
     room,
     characterId,
     {
-      position: { x: nextX, y: member.position.y },
-      facing: dx < 0 ? "left" : "right",
+      position: nextPos,
+      facing:
+        Math.abs(nextPos.x - member.position.x) > 0.05
+          ? nextPos.x < member.position.x
+            ? "left"
+            : "right"
+          : member.facing,
       currentAction: "walk",
       actionTargetId: null,
+      occupiedSpotId: null,
     },
     now,
   );
 }
 
-function pickPair(
+function pickNearPair(
+  room: Room,
   activeIds: CharacterId[],
   rand: () => number,
 ): [CharacterId, CharacterId] | null {
   if (activeIds.length < 2) {
     return null;
   }
-  const aIndex = Math.floor(rand() * activeIds.length);
-  let bIndex = Math.floor(rand() * activeIds.length);
-  if (bIndex === aIndex) {
-    bIndex = (bIndex + 1) % activeIds.length;
+  const nearPairs: Array<[CharacterId, CharacterId]> = [];
+  for (let i = 0; i < activeIds.length; i += 1) {
+    const aId = activeIds[i]!;
+    const a = getMemberState(room, aId);
+    for (let j = i + 1; j < activeIds.length; j += 1) {
+      const bId = activeIds[j]!;
+      const b = getMemberState(room, bId);
+      if (areNearForConversation(a, b)) {
+        nearPairs.push([aId, bId]);
+      }
+    }
   }
-  const a = activeIds[aIndex];
-  const b = activeIds[bIndex];
-  if (!a || !b) {
+  if (nearPairs.length === 0) {
     return null;
   }
-  return [a, b];
+  const pair = nearPairs[Math.floor(rand() * nearPairs.length)];
+  if (!pair) return null;
+  // Randomize who initiates.
+  return rand() < 0.5 ? pair : [pair[1], pair[0]];
+}
+
+function eligibleForAction(
+  room: Room,
+  actorId: CharacterId,
+  action: ActionKind,
+  now: number,
+): boolean {
+  const member = getMemberState(room, actorId);
+  if (member.presence !== "active") return false;
+  return canStartAction(member, action, room.actionLog, now);
 }
 
 /**
  * Advance room simulation one tick.
- * - Active members may wander
- * - Pairs of active members may auto-interact (Sims-lite)
- * - Sleeping members stay asleep until presence updates
+ * Auto: wave / talk / sit / sing (not hug / kiss / dance).
+ * Sit uses free seats; positions never stack.
+ * Social auto-actions only when characters already share nearby space.
+ * Skips already-active actions and respects per-action cooldowns.
  */
 export function tickRoom(
   room: Room,
@@ -113,34 +180,62 @@ export function tickRoom(
 
   let next = room;
   const active = listActiveMembers(next);
+  const skipWander = new Set((config.skipWanderIds ?? []).map(String));
 
   for (const member of active) {
-    next = wander(next, member.characterId, rand, now);
+    if (skipWander.has(String(member.characterId))) continue;
+    next = wander(next, member.characterId, rand, now, config.floorMaxX);
   }
 
   const activeIds = listActiveMembers(next).map((m) => m.characterId);
   let interactions = 0;
+  let attempts = 0;
+  const maxAttempts = Math.max(4, config.maxAutoInteractions * 6);
 
   while (
     interactions < config.maxAutoInteractions &&
-    activeIds.length >= 2 &&
+    attempts < maxAttempts &&
+    activeIds.length >= 1 &&
     rand() < config.autoInteractChance
   ) {
-    const pair = pickPair(activeIds, rand);
-    if (!pair) break;
-
+    attempts += 1;
     const action = AUTO_INTERACTIONS[
       Math.floor(rand() * AUTO_INTERACTIONS.length)
     ] as ActionKind;
 
-    const result = performAction(next, pair[0], action, {
-      targetId: pair[1],
-      source: "auto",
-      now,
-    });
-    next = result.room;
-    events.push(result.logEntry);
-    interactions += 1;
+    try {
+      if (action === "sit" || action === "sing") {
+        const candidates = activeIds.filter((id) =>
+          eligibleForAction(next, id, action, now),
+        );
+        if (candidates.length === 0) continue;
+        const actorId = candidates[Math.floor(rand() * candidates.length)];
+        if (!actorId) continue;
+        if (action === "sit" && !findFreeSpotForAction(next, "sit", actorId)) {
+          continue;
+        }
+        const result = performAction(next, actorId, action, {
+          source: "auto",
+          now,
+        });
+        next = result.room;
+        events.push(result.logEntry);
+      } else {
+        const pair = pickNearPair(next, activeIds, rand);
+        if (!pair) continue;
+        if (!eligibleForAction(next, pair[0], action, now)) continue;
+        const result = performAction(next, pair[0], action, {
+          targetId: pair[1],
+          source: "auto",
+          now,
+        });
+        next = result.room;
+        events.push(result.logEntry);
+      }
+      interactions += 1;
+    } catch {
+      // skip failed auto attempts (no seat, cooldown, already doing it, etc.)
+    }
   }
 
   return { room: next, events };
