@@ -447,6 +447,17 @@ export function RoomScreen({
       return;
     }
     
+    // Handle cooking action specially - show ingredient selector first
+    if (action === "cook") {
+      if (!isActionUnlocked(action, placedSprites)) {
+        setStatus(actionUnlockHint(action) ?? `Need furniture for *${action}`);
+        return;
+      }
+      setShowIngredientSelector(true);
+      onSendAction(action, targetName);
+      return;
+    }
+    
     if (!isActionUnlocked(action, placedSprites)) {
       setStatus(actionUnlockHint(action) ?? `Need furniture for *${action}`);
       return;

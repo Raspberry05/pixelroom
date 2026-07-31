@@ -1120,8 +1120,8 @@ export function RoomStage({
                   }
                   onTapPacked={handleTapPacked}
                   editing={editing}
-                  hasAction={!editing && !item.packed && hasAction(item.sprite)}
-                  onTapAction={!editing && onFurnitureAction ? () => onFurnitureAction(item.id, item.sprite) : undefined}
+                  hasAction={!editing && !item.packed && hasAction(item.sprite) && item.sprite !== "appliance"}
+                  onTapAction={!editing && onFurnitureAction && item.sprite !== "appliance" ? () => onFurnitureAction(item.id, item.sprite) : undefined}
                 />
               ))
             : null}
