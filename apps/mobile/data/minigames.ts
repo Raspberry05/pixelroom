@@ -1,6 +1,6 @@
 import type { FurnitureSprite } from "./roomLayout";
 
-export type MiniGameType = "cooking" | "cleaning" | "unpack" | "tv" | "bedmaking" | "watering";
+export type MiniGameType = "cooking" | "frying" | "cleaning" | "unpack" | "tv" | "bedmaking" | "watering";
 
 export type FurnitureAction = {
   furnitureSprite: FurnitureSprite;

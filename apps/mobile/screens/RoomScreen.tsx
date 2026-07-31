@@ -25,6 +25,7 @@ import { CallStatusBanner } from "../components/CallStatusBanner";
 import type { CallState } from "../components/CallScreen";
 import { DirtOverlay } from "../components/room/DirtOverlay";
 import { CookingMiniGame } from "../components/minigames/CookingMiniGame";
+import { FryingMiniGame } from "../components/minigames/FryingMiniGame";
 import { CleaningMiniGame } from "../components/minigames/CleaningMiniGame";
 import { TVWatchingMiniGame } from "../components/minigames/TVWatchingMiniGame";
 import { BedMakingMiniGame } from "../components/minigames/BedMakingMiniGame";
@@ -80,6 +81,7 @@ const ACTION_CHIPS: { label: string; action: ActionKind; needsTarget?: boolean }
   { label: "*wave", action: "wave", needsTarget: true },
   { label: "*sit", action: "sit" },
   { label: "*cook", action: "cook" },
+  { label: "*fry", action: "fry" },
   { label: "*clean", action: "clean" },
   { label: "*watch", action: "watch" },
   { label: "*hug", action: "hug", needsTarget: true },
@@ -202,6 +204,7 @@ export function RoomScreen({
   const [activeMiniGame, setActiveMiniGame] = useState<MiniGameType | null>(null);
   const [selectedFurnitureForAction, setSelectedFurnitureForAction] = useState<string | null>(null);
   const [showIngredientSelector, setShowIngredientSelector] = useState(false);
+  const [cookingMode, setCookingMode] = useState<"cook" | "fry">("cook");
   const [selectedIngredients, setSelectedIngredients] = useState<IngredientAmount[]>([]);
   const [cookedDish, setCookedDish] = useState<CookedDish | null>(null);
   const peerKey =
@@ -455,6 +458,21 @@ export function RoomScreen({
         setStatus(actionUnlockHint(action) ?? `Need furniture for *${action}`);
         return;
       }
+      setCookingMode("cook");
+      setShowIngredientSelector(true);
+      onSendAction(action, targetName);
+      return;
+    }
+    
+    // Handle frying action specially - show ingredient selector first
+    if (action === "fry") {
+      // Check for fryer appliance
+      if (!hasAppliance(document, "fryer")) {
+        setStatus("Need a Deep Fryer to fry food! 🍟");
+        setTimeout(() => setStatus(null), 3000);
+        return;
+      }
+      setCookingMode("fry");
       setShowIngredientSelector(true);
       onSendAction(action, targetName);
       return;
@@ -554,14 +572,16 @@ export function RoomScreen({
   }
 
   function handleIngredientsSelected(ingredients: IngredientAmount[]) {
-    // Check if user has required appliance for this recipe
-    const requiredAppliance = getRequiredAppliance(ingredients);
-    
-    if (requiredAppliance && !hasAppliance(document, requiredAppliance)) {
-      setShowIngredientSelector(false);
-      setStatus(`Need a ${getApplianceName(requiredAppliance)} to cook this! 🍳`);
-      setTimeout(() => setStatus(null), 3000);
-      return;
+    // Check if user has required appliance for this recipe (only for cook mode)
+    if (cookingMode === "cook") {
+      const requiredAppliance = getRequiredAppliance(ingredients);
+      
+      if (requiredAppliance && !hasAppliance(document, requiredAppliance)) {
+        setShowIngredientSelector(false);
+        setStatus(`Need a ${getApplianceName(requiredAppliance)} to cook this! 🍳`);
+        setTimeout(() => setStatus(null), 3000);
+        return;
+      }
     }
     
     // Deduct ingredients from inventory
@@ -574,10 +594,10 @@ export function RoomScreen({
     }
     onChangeInventory(newInventory);
     
-    // Save selected ingredients and start cooking
+    // Save selected ingredients and start appropriate mini-game
     setSelectedIngredients(ingredients);
     setShowIngredientSelector(false);
-    setActiveMiniGame("cooking");
+    setActiveMiniGame(cookingMode === "fry" ? "frying" : "cooking");
   }
 
   function handleIngredientSelectorCancel() {
@@ -593,8 +613,8 @@ export function RoomScreen({
       onCleanRoom();
       setStatus("Room cleaned! ✨");
       setTimeout(() => setStatus(null), 2000);
-    } else if (activeMiniGame === "cooking" && dish) {
-      // Show cooking result
+    } else if ((activeMiniGame === "cooking" || activeMiniGame === "frying") && dish) {
+      // Show cooking/frying result
       setCookedDish(dish);
     }
     
@@ -853,6 +873,12 @@ export function RoomScreen({
       />
       <CookingMiniGame
         visible={activeMiniGame === "cooking"}
+        selectedIngredients={selectedIngredients}
+        onComplete={handleMiniGameComplete}
+        onCancel={handleMiniGameCancel}
+      />
+      <FryingMiniGame
+        visible={activeMiniGame === "frying"}
         selectedIngredients={selectedIngredients}
         onComplete={handleMiniGameComplete}
         onCancel={handleMiniGameCancel}

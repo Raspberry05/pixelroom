@@ -60,6 +60,7 @@ export type ActionKind =
   | "sleep"
   | "walk"
   | "cook"
+  | "fry"
   | "clean"
   | "hug"
   | "kiss"
