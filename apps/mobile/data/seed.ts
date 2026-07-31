@@ -225,18 +225,6 @@ export function getPeerKey(self: DemoUserKey): DemoUserKey {
   return self === "alice" ? "bob" : "alice";
 }
 
-/** Hallway avatar faces — always peers only (never self); parties use up to 2. */
-export function appearancesForConversation(
-  memberKeys: DemoUserKey[],
-  kind: "dm" | "party",
-  selfKey: DemoUserKey,
-): Appearance[] {
-  const peers = memberKeys.filter((k) => k !== selfKey);
-  const keys =
-    kind === "dm" ? peers.slice(0, 1) : peers.slice(0, 3);
-  return keys.map((k) => DEMO_USERS[k].character.appearance);
-}
-
 export function contactsFor(self: DemoUserKey): Contact[] {
   return (Object.keys(DEMO_USERS) as DemoUserKey[])
     .filter((k) => k !== self)

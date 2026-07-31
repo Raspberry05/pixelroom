@@ -75,6 +75,7 @@ import {
   isTestLabRoom,
 } from "../data/testLab";
 import { DEMO_USERS, isDemoUserKey, type DemoUserKey } from "../data/seed";
+import { appearanceForUser } from "../data/appearanceStore";
 import type { ChatLine } from "../sync/protocol";
 import { colors, radii, space } from "../theme";
 import {
@@ -424,7 +425,7 @@ export function RoomScreen({
       characterId: DEMO_USERS[key].character.id,
       name: selfKey === key ? "You" : DEMO_USERS[key].character.displayName,
       appearance:
-        selfKey === key ? selfAppearance : DEMO_USERS[key].character.appearance,
+        selfKey === key ? selfAppearance : appearanceForUser(key),
       isSelf: selfKey === key,
       userKey: key,
     }));

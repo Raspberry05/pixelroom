@@ -71,6 +71,10 @@ import {
   setUserQueryParam,
   type OnboardingProfile,
 } from "./data/onboarding";
+import {
+  loadAppearance,
+  saveAppearance,
+} from "./data/appearanceStore";
 import { usePixelSync } from "./sync/client";
 import { colors } from "./theme";
 
@@ -137,6 +141,7 @@ function demoUserFromBoot(
     profile && profile.userKey === userKey ? profile.phone : base.phone;
   const country =
     profile && profile.userKey === userKey ? profile.country : base.country;
+  const savedAppearance = loadAppearance(userKey);
   return {
     ...base,
     phone,
@@ -144,7 +149,9 @@ function demoUserFromBoot(
     character: {
       ...base.character,
       displayName,
-      appearance: migrateAppearanceHats(base.character.appearance),
+      appearance: migrateAppearanceHats(
+        savedAppearance ?? base.character.appearance,
+      ),
     },
   };
 }
@@ -282,6 +289,10 @@ export default function App() {
       }
     }
   }, [ownedClothes]);
+
+  useEffect(() => {
+    saveAppearance(userKey, self.character.appearance);
+  }, [userKey, self.character.appearance]);
 
   const top = nav.stack[nav.stack.length - 1] ?? { name: "tabs" as const };
   const selfCharacterId = DEMO_USERS[userKey].character.id;
@@ -1122,7 +1133,10 @@ export default function App() {
                   ...prev,
                   character: {
                     ...prev.character,
-                    appearance: { ...prev.character.appearance, ...patch },
+                    appearance: migrateAppearanceHats({
+                      ...prev.character.appearance,
+                      ...patch,
+                    }),
                   },
                 }));
               }}
@@ -1131,6 +1145,7 @@ export default function App() {
         </View>
         <BottomTabs
           active={nav.tab}
+          youAppearance={self.character.appearance}
           onChange={(tab) => setNav((prev) => ({ ...prev, tab }))}
         />
       </View>

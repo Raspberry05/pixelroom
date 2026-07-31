@@ -79,7 +79,6 @@ export function ConversationAvatar({
   const frontSize = Math.round(size * 0.72);
   const midSize = Math.round(size * 0.68);
   const backSize = Math.round(size * 0.64);
-  a;
 
   // char1 front-right (solid), char2 left, char3 mid-X between the two (farther back).
   const char1Left = size - frontSize;

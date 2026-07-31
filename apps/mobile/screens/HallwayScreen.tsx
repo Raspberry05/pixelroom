@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Component, type ErrorInfo, type ReactNode } from "react";
 import {
   Pressable,
   ScrollView,
@@ -7,11 +7,56 @@ import {
   TextInput,
   View,
 } from "react-native";
+import type { Appearance } from "@pixelroom/core";
 import type { ConversationPreview, DemoUserKey } from "../data/seed";
-import { appearancesForConversation } from "../data/seed";
+import {
+  APPEARANCE_STORAGE_KEY,
+  appearancesForConversation,
+} from "../data/appearanceStore";
 import { ConversationAvatar } from "../components/ConversationAvatar";
 import { TopNav } from "../components/TopNav";
 import { colors, radii, space, typography } from "../theme";
+
+class AvatarBoundary extends Component<
+  { appearances: Appearance[]; size: number; children?: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.warn("ConversationAvatar failed", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <View
+          style={{
+            width: this.props.size,
+            height: this.props.size,
+            borderWidth: 1.5,
+            borderColor: colors.border,
+            borderRadius: radii.sm,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text style={{ color: colors.inkMuted, fontWeight: "700" }}>?</Text>
+        </View>
+      );
+    }
+    return (
+      <ConversationAvatar
+        appearances={this.props.appearances}
+        size={this.props.size}
+      />
+    );
+  }
+}
 
 type Props = {
   conversations: ConversationPreview[];
@@ -29,6 +74,18 @@ export function HallwayScreen({
   onOpenNew,
 }: Props) {
   const [query, setQuery] = useState("");
+  const [appearanceTick, setAppearanceTick] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === APPEARANCE_STORAGE_KEY) {
+        setAppearanceTick((n) => n + 1);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -63,11 +120,11 @@ export function HallwayScreen({
       <ScrollView style={styles.list}>
         {filtered.map((convo) => (
           <Pressable
-            key={String(convo.roomId)}
+            key={`${String(convo.roomId)}:${appearanceTick}`}
             style={styles.row}
             onPress={() => onOpenRoom(convo.roomId)}
           >
-            <ConversationAvatar
+            <AvatarBoundary
               appearances={appearancesForConversation(
                 convo.memberKeys,
                 convo.kind,

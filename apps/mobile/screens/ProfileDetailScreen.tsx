@@ -6,6 +6,7 @@ import {
 import { CharacterFace } from "../components/ConversationAvatar";
 import { TopNav } from "../components/TopNav";
 import { DEMO_USERS, isDemoUserKey, type DemoUserKey } from "../data/seed";
+import { appearanceForUser } from "../data/appearanceStore";
 import { colors, space, typography } from "../theme";
 
 type Props = {
@@ -26,7 +27,9 @@ export function ProfileDetailScreen({
   onBack,
   onSelectStyle,
 }: Props) {
-  const demo = isDemoUserKey(String(userKey)) ? DEMO_USERS[userKey] : null;
+  const key = String(userKey);
+  const demo = isDemoUserKey(key) ? DEMO_USERS[key] : null;
+  const appearance = isDemoUserKey(key) ? appearanceForUser(key) : null;
   const styleNote =
     roomKind === "dm"
       ? "Room style is only for your view — they keep their own."
@@ -42,20 +45,20 @@ export function ProfileDetailScreen({
         onBack={onBack}
       />
       <ScrollView contentContainerStyle={styles.body}>
-        {demo ? (
+        {demo && appearance ? (
           <>
             <View style={styles.sprite}>
-              <CharacterFace appearance={demo.character.appearance} size={96} />
+              <CharacterFace appearance={appearance} size={96} />
             </View>
             <Text style={styles.name}>{demo.character.displayName}</Text>
             <Row label="Username" value={`@${demo.username}`} />
             <Row label="Phone" value={demo.phone} />
             <Row label="Country" value={demo.country} />
-            <Row label="Kit" value={demo.character.appearance.kit} />
-            <Row label="Hair" value={demo.character.appearance.hair} />
-            <Row label="Outfit" value={demo.character.appearance.outfit} />
-            <Row label="Hat" value={demo.character.appearance.accessory ?? "none"} />
-            <Row label="Pants" value={demo.character.appearance.pants} />
+            <Row label="Kit" value={appearance.kit} />
+            <Row label="Hair" value={appearance.hair} />
+            <Row label="Outfit" value={appearance.outfit} />
+            <Row label="Hat" value={appearance.accessory ?? "none"} />
+            <Row label="Pants" value={appearance.pants} />
           </>
         ) : (
           <Text style={styles.muted}>Party / contact profile</Text>

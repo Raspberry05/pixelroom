@@ -11,6 +11,7 @@ import { AvatarPreview } from "../components/AvatarSprite";
 import {
   DEMO_OTP_FALLBACK,
   formatPhoneDisplay,
+  isPhoneReady,
   issueDemoOtp,
   otpMatches,
   userKeyFromPhone,
@@ -44,7 +45,7 @@ export function IntroWizardScreen({ onComplete }: Props) {
   const [displayName, setDisplayName] = useState("");
 
   const digits = phone.replace(/\D/g, "");
-  const phoneReady = digits.length >= 10;
+  const phoneReady = isPhoneReady(phone);
   const mappedKey = useMemo(() => userKeyFromPhone(phone), [phone]);
   const previewUser = DEMO_USERS[mappedKey];
 

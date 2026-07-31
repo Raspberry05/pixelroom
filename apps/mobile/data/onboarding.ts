@@ -24,6 +24,21 @@ export function normalizePhoneDigits(phone: string): string {
   return phone.replace(/\D/g, "");
 }
 
+/** True when the number is long enough, or matches a demo seed phone (short 555-01xx). */
+export function isPhoneReady(phone: string): boolean {
+  const digits = normalizePhoneDigits(phone);
+  if (digits.length >= 10) return true;
+  const compact = digits.replace(/^1(?=\d{7,}$)/, "");
+  if (compact.length < 7) return false;
+  return (Object.keys(DEMO_USERS) as DemoUserKey[]).some((key) => {
+    const seed = normalizePhoneDigits(DEMO_USERS[key].phone).replace(
+      /^1(?=\d{7,}$)/,
+      "",
+    );
+    return compact === seed || digits.endsWith(seed);
+  });
+}
+
 export function formatPhoneDisplay(digits: string): string {
   const d = normalizePhoneDigits(digits);
   if (d.length === 11 && d.startsWith("1")) {
