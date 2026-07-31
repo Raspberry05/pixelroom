@@ -47,6 +47,7 @@ import { ProfileDetailScreen } from "./screens/ProfileDetailScreen";
 import { RoomScreen } from "./screens/RoomScreen";
 import { StoreScreen, loadCoins, saveCoins } from "./screens/StoreScreen";
 import { YouScreen } from "./screens/YouScreen";
+import { DevToolsScreen } from "./screens/DevToolsScreen";
 import { usePixelSync } from "./sync/client";
 import { colors } from "./theme";
 
@@ -470,6 +471,8 @@ export default function App() {
         }}
       />
     );
+  } else if (top.name === "devtools") {
+    body = <DevToolsScreen onBack={pop} />;
   } else if (top.name === "newContact") {
     body = (
       <NewContactScreen
@@ -537,6 +540,7 @@ export default function App() {
                   },
                 }))
               }
+              onOpenDevTools={() => push({ name: "devtools" })}
             />
           ) : null}
           {nav.tab === "store" ? (

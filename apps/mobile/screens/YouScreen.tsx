@@ -4,12 +4,13 @@ import { AvatarPreview } from "../components/AvatarSprite";
 import { TopNav } from "../components/TopNav";
 import type { DemoUser } from "../data/seed";
 import { SHEET_PRESETS } from "../data/sprites";
-import { colors, space, typography } from "../theme";
+import { colors, radii, space, typography } from "../theme";
 
 type Props = {
   user: DemoUser;
   onChangeName: (name: string) => void;
   onChangeAppearance: (patch: Partial<Appearance>) => void;
+  onOpenDevTools?: () => void;
 };
 
 const HAIR = [
@@ -28,13 +29,19 @@ const PANTS = [
   { id: "none", label: "None" },
 ] as const;
 
-export function YouScreen({ user, onChangeName, onChangeAppearance }: Props) {
+export function YouScreen({ user, onChangeName, onChangeAppearance, onOpenDevTools }: Props) {
   const a = user.character.appearance;
   const kit = a.kit === "sheet" ? "sheet" : "cozy";
 
   return (
     <View style={styles.flex}>
       <TopNav title="You" subtitle="Character studio" />
+      
+      {onOpenDevTools && (
+        <Pressable style={styles.devToolsBtn} onPress={onOpenDevTools}>
+          <Text style={styles.devToolsBtnText}>🛠️ Developer Tools</Text>
+        </Pressable>
+      )}
       <ScrollView contentContainerStyle={styles.body}>
         <View style={styles.preview}>
           <AvatarPreview appearance={a} size={112} />
@@ -161,4 +168,19 @@ const styles = StyleSheet.create({
   },
   chipOn: { backgroundColor: colors.accentSoft },
   chipText: { fontSize: 12, fontWeight: "600", color: colors.ink },
+  devToolsBtn: {
+    margin: space.md,
+    marginBottom: 0,
+    backgroundColor: "#FFD700",
+    borderWidth: 3,
+    borderColor: "#000000",
+    borderRadius: radii.lg,
+    paddingVertical: space.md,
+    alignItems: "center",
+  },
+  devToolsBtnText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#000000",
+  },
 });
