@@ -15,6 +15,7 @@ import {
   contactsFor,
   getPeerKey,
   initialConversations,
+  isDemoUserKey,
   resolveDemoUser,
   type Contact,
   type ConversationPreview,
@@ -181,11 +182,16 @@ export default function App() {
       return;
     }
     const roomId = asRoomId(`dm:local:${contact.characterId}`);
+    const memberKey = isDemoUserKey(String(contact.userKey))
+      ? (contact.userKey as DemoUserKey)
+      : undefined;
     setConversations((prev) => [
       {
         roomId,
         kind: "dm",
         title: contact.displayName,
+        peerUserKey: memberKey,
+        memberKeys: memberKey ? [memberKey] : [],
         preview: "Say hi",
         updatedAt: Date.now(),
         personalStyleId: "garden",
@@ -225,6 +231,7 @@ export default function App() {
         selfAppearance={self.character.appearance}
         title={convo?.title ?? "Room"}
         room={sync.room}
+        memberKeys={convo?.memberKeys}
         messages={sync.messages}
         inventory={inventory}
         onChangeInventory={setInventory}
@@ -319,12 +326,17 @@ export default function App() {
         onBack={pop}
         onCreate={(name, memberIds) => {
           const roomId = asRoomId(`party:${Date.now()}`);
+          const selectedKeys = (Object.keys(DEMO_USERS) as DemoUserKey[]).filter(
+            (k) => memberIds.includes(String(DEMO_USERS[k].character.id)),
+          );
+          const memberKeys = Array.from(new Set<DemoUserKey>([userKey, ...selectedKeys]));
           setConversations((prev) => [
             {
               roomId,
               kind: "party",
               title: name,
-              preview: `Party · ${memberIds.length + 1} people`,
+              memberKeys,
+              preview: `Party · ${memberKeys.length} people`,
               updatedAt: Date.now(),
             },
             ...prev,

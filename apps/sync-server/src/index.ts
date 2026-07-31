@@ -18,7 +18,7 @@ import {
   type Room,
 } from "./domain.js";
 
-type DemoUserKey = "alice" | "bob";
+type DemoUserKey = "alice" | "bob" | "carol";
 
 type ChatLine = {
   id: string;
@@ -62,7 +62,9 @@ const TICK_MS = 1000;
 
 const ALICE_ID = asCharacterId("char_alice");
 const BOB_ID = asCharacterId("char_bob");
+const CAROL_ID = asCharacterId("char_carol");
 const DM_ROOM_ID = asRoomId("dm:alice:bob");
+const PARTY_ROOM_ID = asRoomId("party:alice:bob:carol");
 
 const characters: Record<string, Character> = {
   [String(ALICE_ID)]: {
@@ -95,27 +97,91 @@ const characters: Record<string, Character> = {
     },
     createdAt: Date.now(),
   },
+  [String(CAROL_ID)]: {
+    id: CAROL_ID,
+    accountId: asAccountId("acct_carol"),
+    displayName: "Carol",
+    appearance: {
+      kit: "cozy",
+      sheetId: "120",
+      hair: "black",
+      outfit: "red",
+      pants: "blue",
+      skin: "fair",
+      accessory: null,
+    },
+    createdAt: Date.now(),
+  },
 };
 
 const characterByUser: Record<DemoUserKey, CharacterId> = {
   alice: ALICE_ID,
   bob: BOB_ID,
+  carol: CAROL_ID,
 };
 
 const nameByUser: Record<DemoUserKey, string> = {
   alice: "Alice",
   bob: "Bob",
+  carol: "Carol",
 };
 
-let room: Room = createSeedCompatibleRoom(DM_ROOM_ID, [ALICE_ID, BOB_ID]);
+function userKeyForCharacter(id: CharacterId): DemoUserKey {
+  if (id === BOB_ID) return "bob";
+  if (id === CAROL_ID) return "carol";
+  return "alice";
+}
+
+function resolveUserKey(raw: string | undefined): DemoUserKey {
+  if (raw === "bob") return "bob";
+  if (raw === "carol") return "carol";
+  return "alice";
+}
+
+const rooms = new Map<string, Room>();
+rooms.set(
+  String(DM_ROOM_ID),
+  createSeedCompatibleRoom(DM_ROOM_ID, [ALICE_ID, BOB_ID], { kind: "dm" }),
+);
+rooms.set(
+  String(PARTY_ROOM_ID),
+  createSeedCompatibleRoom(PARTY_ROOM_ID, [ALICE_ID, BOB_ID, CAROL_ID], {
+    kind: "party",
+    name: "Pixel crew",
+    adminIds: [ALICE_ID],
+    styleId: "loft",
+  }),
+);
+
 const messages = new Map<string, ChatLine[]>();
 messages.set(String(DM_ROOM_ID), []);
+messages.set(String(PARTY_ROOM_ID), []);
 /** Shared furniture layout — both members edit; last write wins with rev. */
 const layouts = new Map<string, RoomLayoutState>();
 /** Skip auto-wander briefly after a player scrolls their character. */
 const manualMoveAt = new Map<string, number>();
 
 const sockets = new Map<WebSocket, SocketState>();
+
+function ensureRoom(roomId: string): Room {
+  const existing = rooms.get(roomId);
+  if (existing) return existing;
+  const seeded =
+    roomId.startsWith("party:")
+      ? createSeedCompatibleRoom(asRoomId(roomId), [ALICE_ID, BOB_ID, CAROL_ID], {
+          kind: "party",
+          name: "Party",
+          adminIds: [ALICE_ID],
+        })
+      : createSeedCompatibleRoom(asRoomId(roomId), [ALICE_ID, BOB_ID], { kind: "dm" });
+  rooms.set(roomId, seeded);
+  if (!messages.has(roomId)) messages.set(roomId, []);
+  return seeded;
+}
+
+function setRoomState(roomId: string, next: Room) {
+  rooms.set(roomId, next);
+}
 
 function worldSpanForRoom(roomId: string): number {
   const doc = layouts.get(roomId)?.document as
@@ -137,6 +203,7 @@ function layoutPayload(roomId: string): RoomLayoutState | null {
 }
 
 function broadcastRoom(roomId: string) {
+  const room = ensureRoom(roomId);
   const layout = layoutPayload(roomId);
   const payload = {
     type: "room_state",
@@ -180,9 +247,7 @@ function appendMessage(line: ChatLine) {
 }
 
 function charactersById(): Map<CharacterId, Character> {
-  return new Map(
-    Object.values(characters).map((c) => [c.id, c] as const),
-  );
+  return new Map(Object.values(characters).map((c) => [c.id, c] as const));
 }
 
 function handleMessage(ws: WebSocket, raw: string) {
@@ -198,7 +263,7 @@ function handleMessage(ws: WebSocket, raw: string) {
   if (!state) return;
 
   if (msg.type === "hello") {
-    state.userKey = msg.userKey === "bob" ? "bob" : "alice";
+    state.userKey = resolveUserKey(msg.userKey);
     send(ws, { type: "hello_ok", userKey: state.userKey });
     return;
   }
@@ -213,7 +278,8 @@ function handleMessage(ws: WebSocket, raw: string) {
 
   if (msg.type === "join_room") {
     state.roomId = msg.roomId;
-    room = setPresence(room, characterId, "active");
+    const room = setPresence(ensureRoom(msg.roomId), characterId, "active");
+    setRoomState(msg.roomId, room);
     broadcastRoom(msg.roomId);
     return;
   }
@@ -222,13 +288,15 @@ function handleMessage(ws: WebSocket, raw: string) {
     if (state.roomId === msg.roomId) {
       state.roomId = null;
     }
-    room = setPresence(room, characterId, "sleeping");
+    const room = setPresence(ensureRoom(msg.roomId), characterId, "sleeping");
+    setRoomState(msg.roomId, room);
     broadcastRoom(msg.roomId);
     return;
   }
 
   if (msg.type === "presence") {
-    room = setPresence(room, characterId, msg.presence);
+    const room = setPresence(ensureRoom(msg.roomId), characterId, msg.presence);
+    setRoomState(msg.roomId, room);
     broadcastRoom(msg.roomId);
     return;
   }
@@ -246,18 +314,19 @@ function handleMessage(ws: WebSocket, raw: string) {
       kind: "text",
     };
     appendMessage(line);
-    room = { ...room, updatedAt: Date.now() };
+    const room = ensureRoom(msg.roomId);
+    setRoomState(msg.roomId, { ...room, updatedAt: Date.now() });
     return;
   }
 
   if (msg.type === "action") {
     try {
-      const result = performAction(room, characterId, msg.action, {
+      const result = performAction(ensureRoom(msg.roomId), characterId, msg.action, {
         targetName: msg.targetName ?? null,
         charactersById: charactersById(),
         source: "command",
       });
-      room = result.room;
+      setRoomState(msg.roomId, result.room);
       const target = result.logEntry.targetId
         ? characters[String(result.logEntry.targetId)]?.displayName
         : null;
@@ -285,15 +354,15 @@ function handleMessage(ws: WebSocket, raw: string) {
       if (!isRoomStyleId(msg.styleId)) {
         throw new Error("unknown room style");
       }
-      // DM: style changes are client-local; ignore shared mutations.
-      if (room.kind === "dm") {
+      const current = ensureRoom(msg.roomId);
+      if (current.kind === "dm") {
         send(ws, {
           type: "error",
           message: "DM room styles are personal — change them in your settings only",
         });
         return;
       }
-      room = setRoomStyle(room, msg.styleId, characterId);
+      setRoomState(msg.roomId, setRoomStyle(current, msg.styleId, characterId));
       broadcastRoom(msg.roomId);
     } catch (error) {
       send(ws, {
@@ -321,6 +390,7 @@ function handleMessage(ws: WebSocket, raw: string) {
 
   if (msg.type === "set_position") {
     const maxX = worldSpanForRoom(msg.roomId);
+    let room = ensureRoom(msg.roomId);
     const current = room.memberState[String(characterId)];
     if (!current || current.presence !== "active") return;
     const x = Math.max(0, Math.min(maxX, Number(msg.x) || 0));
@@ -346,6 +416,7 @@ function handleMessage(ws: WebSocket, raw: string) {
       },
       Date.now(),
     );
+    setRoomState(msg.roomId, room);
     manualMoveAt.set(String(characterId), Date.now());
     broadcastRoom(msg.roomId);
     return;
@@ -377,7 +448,12 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     const state = sockets.get(ws);
     if (state?.userKey && state.roomId) {
-      room = setPresence(room, characterByUser[state.userKey], "sleeping");
+      const room = setPresence(
+        ensureRoom(state.roomId),
+        characterByUser[state.userKey],
+        "sleeping",
+      );
+      setRoomState(state.roomId, room);
       broadcastRoom(state.roomId);
     }
     sockets.delete(ws);
@@ -385,40 +461,41 @@ wss.on("connection", (ws) => {
 });
 
 setInterval(() => {
-  const active = Object.values(room.memberState).some((m) => m.presence === "active");
-  if (!active) return;
   const now = Date.now();
-  const roomId = String(room.id);
-  const skipWanderIds = Object.values(room.memberState)
-    .filter((m) => now - (manualMoveAt.get(String(m.characterId)) ?? 0) < 2800)
-    .map((m) => m.characterId);
-  const result = tickRoom(room, {
-    now,
-    config: {
-      autoInteractChance: 0.45,
-      maxAutoInteractions: 1,
-      skipWanderIds,
-      floorMaxX: worldSpanForRoom(roomId),
-    },
-  });
-  room = result.room;
-  const list = messages.get(roomId) ?? [];
-  for (const event of result.events) {
-    const actor = characters[String(event.actorId)];
-    const target = event.targetId ? characters[String(event.targetId)] : null;
-    list.push({
-      id: event.id,
-      roomId,
-      senderKey: event.actorId === ALICE_ID ? "alice" : "bob",
-      senderName: actor?.displayName ?? "Someone",
-      text: target ? `*${event.action} ${target.displayName}` : `*${event.action}`,
-      at: event.at,
-      kind: "action",
+  for (const [roomId, room] of rooms) {
+    const active = Object.values(room.memberState).some((m) => m.presence === "active");
+    if (!active) continue;
+    const skipWanderIds = Object.values(room.memberState)
+      .filter((m) => now - (manualMoveAt.get(String(m.characterId)) ?? 0) < 2800)
+      .map((m) => m.characterId);
+    const result = tickRoom(room, {
+      now,
+      config: {
+        autoInteractChance: 0.45,
+        maxAutoInteractions: 1,
+        skipWanderIds,
+        floorMaxX: worldSpanForRoom(roomId),
+      },
     });
+    setRoomState(roomId, result.room);
+    const list = messages.get(roomId) ?? [];
+    for (const event of result.events) {
+      const actor = characters[String(event.actorId)];
+      const target = event.targetId ? characters[String(event.targetId)] : null;
+      list.push({
+        id: event.id,
+        roomId,
+        senderKey: userKeyForCharacter(event.actorId),
+        senderName: actor?.displayName ?? "Someone",
+        text: target ? `*${event.action} ${target.displayName}` : `*${event.action}`,
+        at: event.at,
+        kind: "action",
+      });
+    }
+    messages.set(roomId, list.slice(-200));
+    broadcastRoom(roomId);
   }
-  messages.set(roomId, list.slice(-200));
-  broadcastRoom(roomId);
 }, TICK_MS);
 
 console.log(`Pixelroom sync server on ws://localhost:${PORT}`);
-console.log(`Open two browsers: ?user=alice and ?user=bob`);
+console.log(`Open browsers: ?user=alice | ?user=bob | ?user=carol`);

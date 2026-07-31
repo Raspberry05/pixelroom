@@ -3,13 +3,14 @@ import {
   asCharacterId,
   asRoomId,
   DEFAULT_HOTSPOTS,
+  type Appearance,
   type Character,
   type Room,
   type RoomId,
   type RoomStyleId,
 } from "@pixelroom/core";
 
-export type DemoUserKey = "alice" | "bob";
+export type DemoUserKey = "alice" | "bob" | "carol";
 
 export type Contact = {
   userKey: DemoUserKey | string;
@@ -25,6 +26,8 @@ export type ConversationPreview = {
   kind: "dm" | "party";
   title: string;
   peerUserKey?: DemoUserKey;
+  /** Member keys shown in hallway avatar (peer for DM; others for party). */
+  memberKeys: DemoUserKey[];
   preview: string;
   updatedAt: number;
   /** Local-only room skin for DMs (does not sync to peer). */
@@ -51,7 +54,9 @@ const NOW = 1_700_000_000_000;
 
 export const ALICE_ID = asCharacterId("char_alice");
 export const BOB_ID = asCharacterId("char_bob");
+export const CAROL_ID = asCharacterId("char_carol");
 export const DM_ROOM_ID = asRoomId("dm:alice:bob");
+export const PARTY_ROOM_ID = asRoomId("party:alice:bob:carol");
 
 export const DEMO_USERS: Record<DemoUserKey, DemoUser> = {
   alice: {
@@ -96,43 +101,104 @@ export const DEMO_USERS: Record<DemoUserKey, DemoUser> = {
       createdAt: NOW,
     },
   },
+  carol: {
+    key: "carol",
+    username: "carol",
+    phone: "+1 555 0103",
+    country: "US",
+    character: {
+      id: CAROL_ID,
+      accountId: asAccountId("acct_carol"),
+      displayName: "Carol",
+      appearance: {
+        kit: "cozy",
+        sheetId: "120",
+        hair: "black",
+        outfit: "red",
+        pants: "blue",
+        skin: "fair",
+        accessory: null,
+      },
+      createdAt: NOW,
+    },
+  },
 };
 
 export function resolveDemoUser(raw: string | null | undefined): DemoUserKey {
-  return raw === "bob" ? "bob" : "alice";
+  if (raw === "bob") return "bob";
+  if (raw === "carol") return "carol";
+  return "alice";
 }
 
 export function getPeerKey(self: DemoUserKey): DemoUserKey {
   return self === "alice" ? "bob" : "alice";
 }
 
+export function isDemoUserKey(value: string): value is DemoUserKey {
+  return value === "alice" || value === "bob" || value === "carol";
+}
+
+/** Appearances for hallway avatars (DM: peer; party: up to 3 members). */
+export function appearancesForConversation(memberKeys: DemoUserKey[]): Appearance[] {
+  return memberKeys.slice(0, 3).map((k) => DEMO_USERS[k].character.appearance);
+}
+
 export function contactsFor(self: DemoUserKey): Contact[] {
-  const peer = DEMO_USERS[getPeerKey(self)];
-  return [
-    {
-      userKey: peer.key,
-      characterId: String(peer.character.id),
-      displayName: peer.character.displayName,
-      username: peer.username,
-      phone: peer.phone,
-      country: peer.country,
-    },
-  ];
+  return (Object.keys(DEMO_USERS) as DemoUserKey[])
+    .filter((k) => k !== self)
+    .map((k) => {
+      const peer = DEMO_USERS[k];
+      return {
+        userKey: peer.key,
+        characterId: String(peer.character.id),
+        displayName: peer.character.displayName,
+        username: peer.username,
+        phone: peer.phone,
+        country: peer.country,
+      };
+    });
 }
 
 export function initialConversations(self: DemoUserKey): ConversationPreview[] {
   const peer = DEMO_USERS[getPeerKey(self)];
   return [
     {
+      roomId: PARTY_ROOM_ID,
+      kind: "party",
+      title: "Pixel crew",
+      memberKeys: ["alice", "bob", "carol"],
+      preview: "Party · Alice, Bob & Carol",
+      updatedAt: NOW + 1,
+    },
+    {
       roomId: DM_ROOM_ID,
       kind: "dm",
       title: peer.character.displayName,
       peerUserKey: peer.key,
+      memberKeys: [peer.key],
       preview: "Open the room to hang out",
       updatedAt: NOW,
       personalStyleId: "garden",
     },
   ];
+}
+
+function sleepingMember(
+  characterId: ReturnType<typeof asCharacterId>,
+  x: number,
+  y: number,
+  facing: "left" | "right",
+) {
+  return {
+    characterId,
+    presence: "sleeping" as const,
+    position: { x, y },
+    facing,
+    currentAction: "sleep" as const,
+    actionTargetId: null,
+    occupiedSpotId: null,
+    lastActiveAt: NOW,
+  };
 }
 
 export function createSeedDmRoom(): Room {
@@ -145,26 +211,28 @@ export function createSeedDmRoom(): Room {
     styleId: "garden",
     hotspots: DEFAULT_HOTSPOTS.map((h) => ({ ...h, position: { ...h.position } })),
     memberState: {
-      [String(ALICE_ID)]: {
-        characterId: ALICE_ID,
-        presence: "sleeping",
-        position: { x: 3, y: 1.6 },
-        facing: "right",
-        currentAction: "sleep",
-        actionTargetId: null,
-        occupiedSpotId: null,
-        lastActiveAt: NOW,
-      },
-      [String(BOB_ID)]: {
-        characterId: BOB_ID,
-        presence: "sleeping",
-        position: { x: 8, y: 2.4 },
-        facing: "left",
-        currentAction: "sleep",
-        actionTargetId: null,
-        occupiedSpotId: null,
-        lastActiveAt: NOW,
-      },
+      [String(ALICE_ID)]: sleepingMember(ALICE_ID, 3, 1.6, "right"),
+      [String(BOB_ID)]: sleepingMember(BOB_ID, 8, 2.4, "left"),
+    },
+    actionLog: [],
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
+
+export function createSeedPartyRoom(): Room {
+  return {
+    id: PARTY_ROOM_ID,
+    kind: "party",
+    name: "Pixel crew",
+    memberIds: [ALICE_ID, BOB_ID, CAROL_ID],
+    adminIds: [ALICE_ID],
+    styleId: "loft",
+    hotspots: DEFAULT_HOTSPOTS.map((h) => ({ ...h, position: { ...h.position } })),
+    memberState: {
+      [String(ALICE_ID)]: sleepingMember(ALICE_ID, 3, 1.6, "right"),
+      [String(BOB_ID)]: sleepingMember(BOB_ID, 7, 2.2, "left"),
+      [String(CAROL_ID)]: sleepingMember(CAROL_ID, 10, 1.4, "left"),
     },
     actionLog: [],
     createdAt: NOW,

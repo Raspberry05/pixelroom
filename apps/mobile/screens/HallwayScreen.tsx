@@ -8,6 +8,8 @@ import {
   View,
 } from "react-native";
 import type { ConversationPreview } from "../data/seed";
+import { appearancesForConversation } from "../data/seed";
+import { ConversationAvatar } from "../components/ConversationAvatar";
 import { TopNav } from "../components/TopNav";
 import { colors, radii, space, typography } from "../theme";
 
@@ -18,7 +20,12 @@ type Props = {
   onOpenNew: () => void;
 };
 
-export function HallwayScreen({ conversations, syncLabel, onOpenRoom, onOpenNew }: Props) {
+export function HallwayScreen({
+  conversations,
+  syncLabel,
+  onOpenRoom,
+  onOpenNew,
+}: Props) {
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
@@ -58,9 +65,10 @@ export function HallwayScreen({ conversations, syncLabel, onOpenRoom, onOpenNew 
             style={styles.row}
             onPress={() => onOpenRoom(convo.roomId)}
           >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{convo.title.slice(0, 1)}</Text>
-            </View>
+            <ConversationAvatar
+              appearances={appearancesForConversation(convo.memberKeys)}
+              size={48}
+            />
             <View style={styles.meta}>
               <View style={styles.rowTop}>
                 <Text style={styles.title}>{convo.title}</Text>
@@ -123,17 +131,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radii.lg,
   },
-  avatar: {
-    width: 48,
-    height: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.accentSoft,
-    borderWidth: 2,
-    borderColor: colors.borderStrong,
-    borderRadius: radii.circle,
-  },
-  avatarText: { fontSize: 18, fontWeight: "700", color: colors.ink },
   meta: { flex: 1, justifyContent: "center" },
   rowTop: { flexDirection: "row", justifyContent: "space-between", gap: space.sm },
   title: { ...typography.body, fontWeight: "700", color: colors.ink },

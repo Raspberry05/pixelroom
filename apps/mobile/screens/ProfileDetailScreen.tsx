@@ -5,7 +5,7 @@ import {
 } from "@pixelroom/core";
 import { AvatarPreview } from "../components/AvatarSprite";
 import { TopNav } from "../components/TopNav";
-import { DEMO_USERS, type DemoUserKey } from "../data/seed";
+import { DEMO_USERS, isDemoUserKey, type DemoUserKey } from "../data/seed";
 import { colors, space, typography } from "../theme";
 
 type Props = {
@@ -26,7 +26,7 @@ export function ProfileDetailScreen({
   onBack,
   onSelectStyle,
 }: Props) {
-  const demo = userKey === "bob" || userKey === "alice" ? DEMO_USERS[userKey] : null;
+  const demo = isDemoUserKey(String(userKey)) ? DEMO_USERS[userKey] : null;
   const styleNote =
     roomKind === "dm"
       ? "Room style is only for your view — they keep their own."

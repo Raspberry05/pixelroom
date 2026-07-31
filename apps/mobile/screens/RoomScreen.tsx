@@ -40,7 +40,7 @@ import {
   type EditTool,
   type RoomDocument,
 } from "../data/roomLayout";
-import { DEMO_USERS, type DemoUserKey } from "../data/seed";
+import { DEMO_USERS, isDemoUserKey, type DemoUserKey } from "../data/seed";
 import type { ChatLine } from "../sync/protocol";
 import { colors, radii, space } from "../theme";
 import {
@@ -93,6 +93,8 @@ type Props = {
   selfAppearance: Appearance;
   title: string;
   room: Room;
+  /** Conversation members (for party avatars / actors when sync is still catching up). */
+  memberKeys?: DemoUserKey[];
   messages: ChatLine[];
   inventory: InventoryState;
   onChangeInventory: (next: InventoryState) => void;
@@ -123,6 +125,7 @@ export function RoomScreen({
   selfAppearance,
   title,
   room,
+  memberKeys,
   messages,
   inventory,
   onChangeInventory,
@@ -148,7 +151,9 @@ export function RoomScreen({
   const [document, setDocument] = useState<RoomDocument>(() => loadDocument(roomId));
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const peerKey = selfKey === "alice" ? "bob" : "alice";
+  const peerKey =
+    memberKeys?.find((k) => k !== selfKey) ??
+    (selfKey === "alice" ? "bob" : "alice");
   const appliedRevRef = useRef(0);
   const ignorePublishRef = useRef(false);
   const publishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -176,7 +181,9 @@ export function RoomScreen({
     ) {
       const line = messages[i];
       if (!line || line.kind === "system") continue;
-      const sender = DEMO_USERS[line.senderKey as DemoUserKey];
+      const sender = isDemoUserKey(line.senderKey)
+        ? DEMO_USERS[line.senderKey]
+        : undefined;
       const member = sender
         ? room.memberState[String(sender.character.id)]
         : undefined;
@@ -319,29 +326,24 @@ export function RoomScreen({
     }
   }, [editing]);
 
-  const actors = useMemo(
-    () => [
-      {
-        characterId: DEMO_USERS.alice.character.id,
-        name: selfKey === "alice" ? "You" : DEMO_USERS.alice.character.displayName,
-        appearance:
-          selfKey === "alice"
-            ? selfAppearance
-            : DEMO_USERS.alice.character.appearance,
-        isSelf: selfKey === "alice",
-        userKey: "alice",
-      },
-      {
-        characterId: DEMO_USERS.bob.character.id,
-        name: selfKey === "bob" ? "You" : DEMO_USERS.bob.character.displayName,
-        appearance:
-          selfKey === "bob" ? selfAppearance : DEMO_USERS.bob.character.appearance,
-        isSelf: selfKey === "bob",
-        userKey: "bob",
-      },
-    ],
-    [selfKey, selfAppearance],
-  );
+  const actors = useMemo(() => {
+    const keys: DemoUserKey[] =
+      memberKeys && memberKeys.length > 0
+        ? memberKeys
+        : (Object.keys(DEMO_USERS) as DemoUserKey[]).filter((k) =>
+            room.memberIds.some((id) => id === DEMO_USERS[k].character.id),
+          );
+    const resolved =
+      keys.length > 0 ? keys : (["alice", "bob"] as DemoUserKey[]);
+    return resolved.map((key) => ({
+      characterId: DEMO_USERS[key].character.id,
+      name: selfKey === key ? "You" : DEMO_USERS[key].character.displayName,
+      appearance:
+        selfKey === key ? selfAppearance : DEMO_USERS[key].character.appearance,
+      isSelf: selfKey === key,
+      userKey: key,
+    }));
+  }, [memberKeys, room.memberIds, selfKey, selfAppearance]);
 
   const bubblesByUserKey = useMemo(() => {
     const map: Record<

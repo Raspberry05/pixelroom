@@ -45,6 +45,12 @@ export {
 export function createSeedCompatibleRoom(
   roomId: RoomId,
   memberIds: CharacterId[],
+  options: {
+    kind?: "dm" | "party";
+    name?: string | null;
+    adminIds?: CharacterId[];
+    styleId?: RoomStyleId;
+  } = {},
 ): Room {
   const now = Date.now();
   const memberState: Room["memberState"] = {};
@@ -52,7 +58,7 @@ export function createSeedCompatibleRoom(
     memberState[String(id)] = {
       characterId: id,
       presence: "sleeping",
-      position: { x: 3 + index * 5, y: 1.6 + (index % 2) * 1.0 },
+      position: { x: 3 + index * 3.5, y: 1.6 + (index % 2) * 1.0 },
       facing: index % 2 === 0 ? "right" : "left",
       currentAction: "sleep",
       actionTargetId: null,
@@ -61,13 +67,15 @@ export function createSeedCompatibleRoom(
     };
   });
 
+  const kind = options.kind ?? (memberIds.length >= 3 ? "party" : "dm");
+
   return {
     id: roomId,
-    kind: "dm",
-    name: null,
+    kind,
+    name: options.name ?? null,
     memberIds: [...memberIds],
-    adminIds: [],
-    styleId: "garden",
+    adminIds: options.adminIds ?? (kind === "party" ? memberIds.slice(0, 1) : []),
+    styleId: options.styleId ?? "garden",
     hotspots: DEFAULT_HOTSPOTS.map((h) => ({ ...h, position: { ...h.position } })),
     memberState,
     actionLog: [],
