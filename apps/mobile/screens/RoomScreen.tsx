@@ -78,6 +78,7 @@ const ACTION_CHIPS: { label: string; action: ActionKind; needsTarget?: boolean }
   { label: "*wave", action: "wave", needsTarget: true },
   { label: "*sit", action: "sit" },
   { label: "*cook", action: "cook" },
+  { label: "*clean", action: "clean" },
   { label: "*watch", action: "watch" },
   { label: "*hug", action: "hug", needsTarget: true },
   { label: "*dance", action: "dance" },
@@ -434,6 +435,18 @@ export function RoomScreen({
     savedAt == null ? "…" : `Saved ${new Date(savedAt).toLocaleTimeString()}`;
 
   function trySendAction(action: ActionKind, targetName?: string | null) {
+    // Handle cleaning action specially - trigger mini-game instead of animation
+    if (action === "clean") {
+      if (currentDirtLevel >= 2) {
+        setActiveMiniGame("cleaning");
+        onSendAction(action, targetName);
+      } else {
+        setStatus("Room is already clean! ✨");
+        setTimeout(() => setStatus(null), 2000);
+      }
+      return;
+    }
+    
     if (!isActionUnlocked(action, placedSprites)) {
       setStatus(actionUnlockHint(action) ?? `Need furniture for *${action}`);
       return;
@@ -573,10 +586,6 @@ export function RoomScreen({
 
   function handleDishResultClose() {
     setCookedDish(null);
-  }
-
-  function promptCleanRoom() {
-    setActiveMiniGame("cleaning");
   }
   
   // Get available ingredients for selector
@@ -747,11 +756,11 @@ export function RoomScreen({
         ) : (
           <View style={styles.hud}>
             {needsCleaning && !editing ? (
-              <Pressable onPress={promptCleanRoom} style={styles.cleaningAlert}>
+              <View style={styles.cleaningAlert}>
                 <Text style={styles.cleaningAlertText}>
-                  🧹 Room is dirty! Tap to clean
+                  🧹 Room is dirty! Use *clean to tidy up
                 </Text>
-              </Pressable>
+              </View>
             ) : null}
             {status ? <Text style={styles.statusHint}>{status}</Text> : null}
             <ScrollView
