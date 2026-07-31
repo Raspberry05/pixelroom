@@ -26,6 +26,9 @@ import type { CallState } from "../components/CallScreen";
 import { DirtOverlay } from "../components/room/DirtOverlay";
 import { CookingMiniGame } from "../components/minigames/CookingMiniGame";
 import { CleaningMiniGame } from "../components/minigames/CleaningMiniGame";
+import { TVWatchingMiniGame } from "../components/minigames/TVWatchingMiniGame";
+import { BedMakingMiniGame } from "../components/minigames/BedMakingMiniGame";
+import { PlantWateringMiniGame } from "../components/minigames/PlantWateringMiniGame";
 import { IngredientSelector } from "../components/cooking/IngredientSelector";
 import { DishResultModal } from "../components/cooking/DishResultModal";
 import {
@@ -819,6 +822,21 @@ export function RoomScreen({
       <CookingMiniGame
         visible={activeMiniGame === "cooking"}
         selectedIngredients={selectedIngredients}
+        onComplete={handleMiniGameComplete}
+        onCancel={handleMiniGameCancel}
+      />
+      <TVWatchingMiniGame
+        visible={activeMiniGame === "tv"}
+        onComplete={handleMiniGameComplete}
+        onCancel={handleMiniGameCancel}
+      />
+      <BedMakingMiniGame
+        visible={activeMiniGame === "bedmaking"}
+        onComplete={handleMiniGameComplete}
+        onCancel={handleMiniGameCancel}
+      />
+      <PlantWateringMiniGame
+        visible={activeMiniGame === "watering"}
         onComplete={handleMiniGameComplete}
         onCancel={handleMiniGameCancel}
       />

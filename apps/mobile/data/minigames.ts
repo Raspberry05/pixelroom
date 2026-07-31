@@ -1,6 +1,6 @@
 import type { FurnitureSprite } from "./roomLayout";
 
-export type MiniGameType = "cooking" | "cleaning" | "unpack";
+export type MiniGameType = "cooking" | "cleaning" | "unpack" | "tv" | "bedmaking" | "watering";
 
 export type FurnitureAction = {
   furnitureSprite: FurnitureSprite;
@@ -21,9 +21,21 @@ export const FURNITURE_ACTIONS: FurnitureAction[] = [
   },
   {
     furnitureSprite: "tv",
-    actionName: "Watch",
-    miniGameType: "unpack", // Placeholder for now
+    actionName: "Watch TV",
+    miniGameType: "tv",
     description: "Watch your favorite show",
+  },
+  {
+    furnitureSprite: "bed",
+    actionName: "Make Bed",
+    miniGameType: "bedmaking",
+    description: "Make your bed nice and tidy",
+  },
+  {
+    furnitureSprite: "plant",
+    actionName: "Water Plant",
+    miniGameType: "watering",
+    description: "Give your plant some water",
   },
 ];
 
