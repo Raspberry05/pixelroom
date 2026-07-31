@@ -80,6 +80,17 @@ export function StoreScreen({
 
   function buyGrocery(item: GroceryItem) {
     if (coins < item.price) return;
+    
+    // Warn about fridge requirement (but still allow purchase)
+    if (item.requiresFridge) {
+      const owned = getQty(inventory, item.id);
+      if (owned >= 3) {
+        // Limit storage without fridge (placeholder - ideally would check room)
+        alert("⚠️ Without a fridge, you can only store limited perishable items!");
+        return;
+      }
+    }
+    
     onChangeCoins(coins - item.price);
     onChangeInventory(refund(inventory, item.id, 1));
   }
@@ -126,7 +137,10 @@ export function StoreScreen({
                     <Text style={styles.groceryEmoji}>{item.emoji}</Text>
                   </View>
                   <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>owned ×{owned}</Text>
+                  <Text style={styles.meta}>
+                    owned ×{owned}
+                    {item.requiresFridge && " 🧊"}
+                  </Text>
                   <Pressable
                     style={[styles.btn, !canBuy && styles.btnDisabled]}
                     onPress={() => buyGrocery(item)}

@@ -3,6 +3,8 @@ export type IngredientAmount = {
   amount: number;
 };
 
+export type ApplianceType = "stove" | "oven" | "fryer" | "microwave" | "blender";
+
 export type Recipe = {
   id: string;
   name: string;
@@ -11,6 +13,8 @@ export type Recipe = {
   ingredients: IngredientAmount[];
   /** Allows some flexibility in ingredient amounts (e.g., 2-3 apples) */
   flexibleAmounts?: boolean;
+  /** Required appliance to cook this recipe */
+  requiredAppliance?: ApplianceType;
 };
 
 export type CookedDish = {
@@ -60,6 +64,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "milk", amount: 1 },
     ],
     flexibleAmounts: true,
+    requiredAppliance: "blender",
   },
   
   // Protein dishes
@@ -73,6 +78,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "egg", amount: 1 },
       { ingredientId: "flour", amount: 1 },
     ],
+    requiredAppliance: "fryer",
   },
   {
     id: "scrambled_eggs",
@@ -83,6 +89,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "egg", amount: 2 },
       { ingredientId: "butter", amount: 1 },
     ],
+    requiredAppliance: "stove",
   },
   {
     id: "bacon_eggs",
@@ -93,6 +100,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "bacon", amount: 2 },
       { ingredientId: "egg", amount: 2 },
     ],
+    requiredAppliance: "stove",
   },
   {
     id: "grilled_fish",
@@ -104,6 +112,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "garlic", amount: 1 },
       { ingredientId: "butter", amount: 1 },
     ],
+    requiredAppliance: "stove",
   },
   {
     id: "shrimp_pasta",
@@ -116,6 +125,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "garlic", amount: 1 },
       { ingredientId: "tomato", amount: 1 },
     ],
+    requiredAppliance: "stove",
   },
   
   // Vegetable dishes
@@ -130,6 +140,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "onion", amount: 1 },
       { ingredientId: "garlic", amount: 1 },
     ],
+    requiredAppliance: "stove",
   },
   {
     id: "tomato_soup",
@@ -142,6 +153,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "garlic", amount: 1 },
       { ingredientId: "milk", amount: 1 },
     ],
+    requiredAppliance: "stove",
   },
   {
     id: "mashed_potatoes",
@@ -153,6 +165,7 @@ export const RECIPES: Recipe[] = [
       { ingredientId: "butter", amount: 1 },
       { ingredientId: "milk", amount: 1 },
     ],
+    requiredAppliance: "stove",
   },
   
   // Grain-based dishes
@@ -303,6 +316,14 @@ export function createDish(selectedIngredients: IngredientAmount[]): CookedDish 
     description: randomDesc,
     quality: "mystery",
   };
+}
+
+/**
+ * Get the required appliance for selected ingredients (by matching to recipe)
+ */
+export function getRequiredAppliance(selectedIngredients: IngredientAmount[]): ApplianceType | null {
+  const recipe = matchRecipe(selectedIngredients);
+  return recipe?.requiredAppliance ?? null;
 }
 
 /**

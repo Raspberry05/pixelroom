@@ -7,6 +7,8 @@ export type GroceryItem = {
   emoji: string;
   price: number;
   description: string;
+  /** Whether this item requires a fridge for storage */
+  requiresFridge?: boolean;
 };
 
 export const GROCERY_ITEMS: GroceryItem[] = [
@@ -118,6 +120,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🍗",
     price: 10,
     description: "Fresh chicken meat",
+    requiresFridge: true,
   },
   {
     id: "egg",
@@ -126,6 +129,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🥚",
     price: 4,
     description: "Farm fresh egg",
+    requiresFridge: true,
   },
   {
     id: "bacon",
@@ -134,6 +138,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🥓",
     price: 8,
     description: "Crispy bacon strips",
+    requiresFridge: true,
   },
   {
     id: "fish",
@@ -142,6 +147,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🐟",
     price: 12,
     description: "Fresh fish fillet",
+    requiresFridge: true,
   },
   {
     id: "shrimp",
@@ -150,6 +156,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🦐",
     price: 15,
     description: "Plump shrimp",
+    requiresFridge: true,
   },
   
   // Grains & Staples
@@ -194,6 +201,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🧀",
     price: 7,
     description: "Aged cheese block",
+    requiresFridge: true,
   },
   {
     id: "milk",
@@ -202,6 +210,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🥛",
     price: 5,
     description: "Fresh milk",
+    requiresFridge: true,
   },
   {
     id: "butter",
@@ -210,6 +219,7 @@ export const GROCERY_ITEMS: GroceryItem[] = [
     emoji: "🧈",
     price: 6,
     description: "Creamy butter",
+    requiresFridge: true,
   },
 ];
 

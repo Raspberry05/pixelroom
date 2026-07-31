@@ -31,6 +31,7 @@ import { BedMakingMiniGame } from "../components/minigames/BedMakingMiniGame";
 import { PlantWateringMiniGame } from "../components/minigames/PlantWateringMiniGame";
 import { IngredientSelector } from "../components/cooking/IngredientSelector";
 import { DishResultModal } from "../components/cooking/DishResultModal";
+import { hasAppliance, getApplianceName } from "../data/applianceRequirements";
 import {
   calculateDirtLevel,
   getAction,
@@ -40,6 +41,7 @@ import {
 } from "../data/minigames";
 import { GROCERY_ITEMS } from "../data/groceryItems";
 import type { IngredientAmount, CookedDish } from "../data/recipes";
+import { getRequiredAppliance } from "../data/recipes";
 import {
   actionUnlockHint,
   furnitureSpritesInRoom,
@@ -552,6 +554,16 @@ export function RoomScreen({
   }
 
   function handleIngredientsSelected(ingredients: IngredientAmount[]) {
+    // Check if user has required appliance for this recipe
+    const requiredAppliance = getRequiredAppliance(ingredients);
+    
+    if (requiredAppliance && !hasAppliance(document, requiredAppliance)) {
+      setShowIngredientSelector(false);
+      setStatus(`Need a ${getApplianceName(requiredAppliance)} to cook this! 🍳`);
+      setTimeout(() => setStatus(null), 3000);
+      return;
+    }
+    
     // Deduct ingredients from inventory
     let newInventory = inventory;
     for (const ing of ingredients) {
