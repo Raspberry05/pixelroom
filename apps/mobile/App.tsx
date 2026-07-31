@@ -10,6 +10,12 @@ import {
 import { BottomTabs } from "./components/BottomTabs";
 import { MessageToast, type AppToast } from "./components/MessageToast";
 import { NewChatSheet } from "./components/NewChatSheet";
+import { CallScreen, type CallState } from "./components/CallScreen";
+import { NotificationBar, type Notification } from "./components/NotificationBar";
+import {
+  requestNotificationPermissions,
+  sendLocalNotification,
+} from "./services/notifications";
 import {
   DEMO_USERS,
   contactsFor,
@@ -89,6 +95,7 @@ function readUserKey(): DemoUserKey {
 export default function App() {
   useEffect(() => {
     ensureSharpPixelsOnWeb();
+    requestNotificationPermissions();
   }, []);
 
   const userKey = useMemo(() => readUserKey(), []);
@@ -115,6 +122,14 @@ export default function App() {
   const lastToastMsgId = useRef<string | null>(null);
   const dismissToast = useCallback(() => setToast(null), []);
   const sync = usePixelSync(userKey);
+  
+  // Call state
+  const [callState, setCallState] = useState<CallState>("ended");
+  const [callDuration, setCallDuration] = useState(0);
+  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  // Notification state
+  const [notification, setNotification] = useState<Notification | null>(null);
 
   useEffect(() => {
     saveInventory(inventory);
@@ -146,11 +161,32 @@ export default function App() {
     lastToastMsgId.current = last.id;
     // In the active room, the in-room HUD / head bubbles cover it.
     if (activeRoomId && String(last.roomId) === activeRoomId) return;
+    
+    // Show in-app notification bar
+    setNotification({
+      id: last.id,
+      title: last.senderName,
+      body: last.text,
+      timestamp: Date.now(),
+      type: "message",
+      onPress: () => {
+        openRoom(last.roomId);
+      },
+    });
+    
+    // Also show toast for backward compatibility
     setToast({
       id: last.id,
       title: last.senderName,
       body: last.text,
       roomId: last.roomId,
+    });
+    
+    // Send push notification if app is in background
+    sendLocalNotification({
+      title: last.senderName,
+      body: last.text,
+      data: { roomId: String(last.roomId), messageId: last.id },
     });
   }, [sync.messages, activeRoomId, userKey]);
 
@@ -209,6 +245,39 @@ export default function App() {
     );
   }
 
+  function startCall(callerName: string, callerKey: DemoUserKey | string) {
+    push({ name: "call", callerName, callerKey, isIncoming: false });
+    setCallState("calling");
+    setCallDuration(0);
+    
+    // Simulate call connecting after 2 seconds
+    setTimeout(() => {
+      setCallState("connected");
+      // Start call timer
+      callTimerRef.current = setInterval(() => {
+        setCallDuration((prev) => prev + 1);
+      }, 1000);
+    }, 2000);
+  }
+
+  function endCall() {
+    setCallState("ended");
+    setCallDuration(0);
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    pop();
+  }
+
+  function acceptCall() {
+    setCallState("connected");
+    setCallDuration(0);
+    callTimerRef.current = setInterval(() => {
+      setCallDuration((prev) => prev + 1);
+    }, 1000);
+  }
+
   const syncLabel =
     sync.status === "open"
       ? `online as ${self.character.displayName}`
@@ -261,6 +330,11 @@ export default function App() {
         onSendAction={(action, targetName) =>
           sync.sendAction(String(top.roomId), action, targetName)
         }
+        onStartCall={() => {
+          const peerKey = convo?.peerUserKey ?? getPeerKey(userKey);
+          const peerName = convo?.title ?? "User";
+          startCall(peerName, peerKey);
+        }}
         syncedLayout={sync.layout}
         onPublishLayout={(document) =>
           sync.sendRoomLayout(String(top.roomId), document)
@@ -346,6 +420,18 @@ export default function App() {
         }}
       />
     );
+  } else if (top.name === "call") {
+    body = (
+      <CallScreen
+        visible
+        callerName={top.callerName}
+        callState={callState}
+        duration={callDuration}
+        onEndCall={endCall}
+        onAcceptCall={top.isIncoming ? acceptCall : undefined}
+        isIncoming={top.isIncoming}
+      />
+    );
   } else {
     body = (
       <View style={styles.flex}>
@@ -416,6 +502,10 @@ export default function App() {
       ) : null}
       <View style={styles.flex}>
         {body}
+        <NotificationBar
+          notification={notification}
+          onDismiss={() => setNotification(null)}
+        />
         <MessageToast
           toast={toast}
           onDismiss={dismissToast}

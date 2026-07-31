@@ -8,7 +8,8 @@ export type StackScreen =
   | { name: "room"; roomId: RoomId }
   | { name: "profile"; userKey: DemoUserKey | string; roomId?: RoomId }
   | { name: "newContact" }
-  | { name: "newParty" };
+  | { name: "newParty" }
+  | { name: "call"; callerName: string; callerKey: DemoUserKey | string; isIncoming?: boolean };
 
 export type NavState = {
   tab: TabKey;

@@ -19,6 +19,7 @@ import {
 import { RoomPalette } from "../components/room/RoomPalette";
 import { RoomStage } from "../components/room/RoomStage";
 import { TopNav } from "../components/TopNav";
+import { CallButton } from "../components/CallButton";
 import {
   actionUnlockHint,
   furnitureSpritesInRoom,
@@ -106,6 +107,7 @@ type Props = {
   onLeave: () => void;
   onSendChat: (text: string) => void;
   onSendAction: (action: ActionKind, targetName?: string | null) => void;
+  onStartCall?: () => void;
   styleId?: RoomStyleId;
   /** Shared layout from sync server (both members edit this). */
   syncedLayout?: {
@@ -137,6 +139,7 @@ export function RoomScreen({
   onLeave,
   onSendChat,
   onSendAction,
+  onStartCall,
   styleId,
   syncedLayout = null,
   onPublishLayout,
@@ -473,16 +476,21 @@ export function RoomScreen({
         }
         onTitlePress={editing ? undefined : onOpenProfile}
         right={
-          <Pressable
-            onPress={() => setEditing((v) => !v)}
-            style={[styles.editBtn, editing && styles.editBtnOn]}
-            accessibilityLabel={editing ? "Done arranging" : "Arrange room"}
-            accessibilityRole="button"
-          >
-            <Text style={[styles.editBtnText, editing && styles.editBtnTextOn]}>
-              {editing ? "✓" : "✎"}
-            </Text>
-          </Pressable>
+          <View style={styles.topNavRight}>
+            {!editing && onStartCall ? (
+              <CallButton onPress={onStartCall} />
+            ) : null}
+            <Pressable
+              onPress={() => setEditing((v) => !v)}
+              style={[styles.editBtn, editing && styles.editBtnOn]}
+              accessibilityLabel={editing ? "Done arranging" : "Arrange room"}
+              accessibilityRole="button"
+            >
+              <Text style={[styles.editBtnText, editing && styles.editBtnTextOn]}>
+                {editing ? "✓" : "✎"}
+              </Text>
+            </Pressable>
+          </View>
         }
       />
 
@@ -647,6 +655,11 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     position: "relative",
+  },
+  topNavRight: {
+    flexDirection: "row",
+    gap: space.sm,
+    alignItems: "center",
   },
   editBtn: {
     width: 40,
