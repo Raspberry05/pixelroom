@@ -18,6 +18,7 @@ type Props = {
   onSelectContact: (contact: Contact) => void;
   onAddContact: () => void;
   onNewGroup: () => void;
+  onSyncContacts?: () => void;
 };
 
 export function NewChatSheet({
@@ -27,6 +28,7 @@ export function NewChatSheet({
   onSelectContact,
   onAddContact,
   onNewGroup,
+  onSyncContacts,
 }: Props) {
   const [query, setQuery] = useState("");
 
@@ -48,6 +50,11 @@ export function NewChatSheet({
         <View style={styles.sheet}>
           <View style={styles.header}>
             <Text style={styles.title}>New conversation</Text>
+            {onSyncContacts && (
+              <Pressable onPress={onSyncContacts} style={styles.syncBtn}>
+                <Text style={styles.syncBtnText}>📱 Sync Phone</Text>
+              </Pressable>
+            )}
             <Pressable onPress={onClose} style={styles.close} accessibilityLabel="Close">
               <Text style={styles.closeText}>×</Text>
             </Pressable>
@@ -122,7 +129,20 @@ const styles = StyleSheet.create({
     paddingTop: space.lg,
     paddingBottom: space.sm,
   },
-  title: { ...typography.title, color: colors.ink },
+  title: { ...typography.title, color: colors.ink, flex: 1 },
+  syncBtn: {
+    backgroundColor: colors.accentSoft,
+    borderWidth: 2,
+    borderColor: colors.accent,
+    borderRadius: radii.pill,
+    paddingHorizontal: space.md,
+    paddingVertical: space.xs,
+  },
+  syncBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.accent,
+  },
   close: {
     width: 36,
     height: 36,

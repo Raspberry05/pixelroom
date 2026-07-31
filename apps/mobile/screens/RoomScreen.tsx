@@ -20,6 +20,9 @@ import { RoomPalette } from "../components/room/RoomPalette";
 import { RoomStage } from "../components/room/RoomStage";
 import { TopNav } from "../components/TopNav";
 import { CallButton } from "../components/CallButton";
+import { CallControls } from "../components/CallControls";
+import { CallStatusBanner } from "../components/CallStatusBanner";
+import type { CallState } from "../components/CallScreen";
 import {
   actionUnlockHint,
   furnitureSpritesInRoom,
@@ -108,6 +111,14 @@ type Props = {
   onSendChat: (text: string) => void;
   onSendAction: (action: ActionKind, targetName?: string | null) => void;
   onStartCall?: () => void;
+  activeCall?: { callerName: string; callerKey: string } | null;
+  callState?: CallState;
+  callDuration?: number;
+  isMuted?: boolean;
+  isSpeakerOn?: boolean;
+  onEndCall?: () => void;
+  onToggleMute?: () => void;
+  onToggleSpeaker?: () => void;
   styleId?: RoomStyleId;
   /** Shared layout from sync server (both members edit this). */
   syncedLayout?: {
@@ -140,6 +151,14 @@ export function RoomScreen({
   onSendChat,
   onSendAction,
   onStartCall,
+  activeCall,
+  callState = "ended",
+  callDuration = 0,
+  isMuted = false,
+  isSpeakerOn = false,
+  onEndCall,
+  onToggleMute,
+  onToggleSpeaker,
   styleId,
   syncedLayout = null,
   onPublishLayout,
@@ -456,8 +475,17 @@ export function RoomScreen({
     setStatus(`Expanded ${side} (−${ROOM_EXPAND_COST}c)`);
   }
 
+  const isOnCall = activeCall != null && (callState === "calling" || callState === "ringing" || callState === "connected");
+
   return (
     <View style={styles.flex}>
+      {isOnCall && activeCall && (
+        <CallStatusBanner
+          callerName={activeCall.callerName}
+          duration={callDuration}
+          callState={callState as "calling" | "ringing" | "connected"}
+        />
+      )}
       <TopNav
         title={title}
         subtitle={
@@ -592,6 +620,16 @@ export function RoomScreen({
                 floorTiles: {},
               }));
             }}
+          />
+        ) : isOnCall && activeCall && onEndCall && onToggleMute && onToggleSpeaker ? (
+          <CallControls
+            duration={callDuration}
+            callerName={activeCall.callerName}
+            isMuted={isMuted}
+            isSpeakerOn={isSpeakerOn}
+            onToggleMute={onToggleMute}
+            onToggleSpeaker={onToggleSpeaker}
+            onEndCall={onEndCall}
           />
         ) : (
           <View style={styles.hud}>

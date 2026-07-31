@@ -16,6 +16,7 @@ import {
   requestNotificationPermissions,
   sendLocalNotification,
 } from "./services/notifications";
+import { importAndMatchContacts } from "./services/contacts";
 import {
   DEMO_USERS,
   contactsFor,
@@ -126,6 +127,12 @@ export default function App() {
   // Call state
   const [callState, setCallState] = useState<CallState>("ended");
   const [callDuration, setCallDuration] = useState(0);
+  const [activeCall, setActiveCall] = useState<{
+    callerName: string;
+    callerKey: DemoUserKey | string;
+  } | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(false);
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // Notification state
@@ -245,10 +252,41 @@ export default function App() {
     );
   }
 
+  async function syncPhoneContacts() {
+    try {
+      const newContacts = await importAndMatchContacts(contacts);
+      if (newContacts.length > 0) {
+        setContacts((prev) => [...newContacts, ...prev]);
+        setToast({
+          id: `sync-${Date.now()}`,
+          title: "Contacts Synced",
+          body: `Added ${newContacts.length} new contact${newContacts.length > 1 ? "s" : ""}`,
+          roomId: asRoomId("system"),
+        });
+      } else {
+        setToast({
+          id: `sync-${Date.now()}`,
+          title: "Contacts Synced",
+          body: "No new contacts to add",
+          roomId: asRoomId("system"),
+        });
+      }
+    } catch (error) {
+      setToast({
+        id: `sync-error-${Date.now()}`,
+        title: "Sync Failed",
+        body: error instanceof Error ? error.message : "Could not sync contacts",
+        roomId: asRoomId("system"),
+      });
+    }
+  }
+
   function startCall(callerName: string, callerKey: DemoUserKey | string) {
-    push({ name: "call", callerName, callerKey, isIncoming: false });
+    setActiveCall({ callerName, callerKey });
     setCallState("calling");
     setCallDuration(0);
+    setIsMuted(false);
+    setIsSpeakerOn(false);
     
     // Simulate call connecting after 2 seconds
     setTimeout(() => {
@@ -263,19 +301,13 @@ export default function App() {
   function endCall() {
     setCallState("ended");
     setCallDuration(0);
+    setActiveCall(null);
+    setIsMuted(false);
+    setIsSpeakerOn(false);
     if (callTimerRef.current) {
       clearInterval(callTimerRef.current);
       callTimerRef.current = null;
     }
-    pop();
-  }
-
-  function acceptCall() {
-    setCallState("connected");
-    setCallDuration(0);
-    callTimerRef.current = setInterval(() => {
-      setCallDuration((prev) => prev + 1);
-    }, 1000);
   }
 
   const syncLabel =
@@ -335,6 +367,14 @@ export default function App() {
           const peerName = convo?.title ?? "User";
           startCall(peerName, peerKey);
         }}
+        activeCall={activeCall}
+        callState={callState}
+        callDuration={callDuration}
+        isMuted={isMuted}
+        isSpeakerOn={isSpeakerOn}
+        onEndCall={endCall}
+        onToggleMute={() => setIsMuted((prev) => !prev)}
+        onToggleSpeaker={() => setIsSpeakerOn((prev) => !prev)}
         syncedLayout={sync.layout}
         onPublishLayout={(document) =>
           sync.sendRoomLayout(String(top.roomId), document)
@@ -418,18 +458,6 @@ export default function App() {
           pop();
           openRoom(roomId);
         }}
-      />
-    );
-  } else if (top.name === "call") {
-    body = (
-      <CallScreen
-        visible
-        callerName={top.callerName}
-        callState={callState}
-        duration={callDuration}
-        onEndCall={endCall}
-        onAcceptCall={top.isIncoming ? acceptCall : undefined}
-        isIncoming={top.isIncoming}
       />
     );
   } else {
@@ -521,6 +549,7 @@ export default function App() {
         onSelectContact={onSelectContact}
         onAddContact={() => push({ name: "newContact" })}
         onNewGroup={() => push({ name: "newParty" })}
+        onSyncContacts={syncPhoneContacts}
       />
     </SafeAreaView>
   );
