@@ -6,21 +6,24 @@ import { colors, radii } from "../theme";
 type FaceProps = {
   appearance: Appearance;
   size?: number;
-  /** Ring border (group stack uses thin rings). */
-  bordered?: boolean;
 };
 
 /**
- * Circular crop zoomed onto the character's head/upper body.
- * Sprite frames include empty padding above the head — we scale up and clip.
+ * Snapchat-style PFP: square, no background, head + shoulders only
+ * (full sprite zoomed and clipped at the torso).
+ *
+ * Cozy frames have empty padding above the head — shift so the face
+ * (not just the hair tip) sits in the crop.
  */
-export function CharacterFace({
-  appearance,
-  size = 48,
-  bordered = true,
-}: FaceProps) {
-  const spriteSize = Math.round(size * 2.05);
-  const offsetY = -Math.round(size * 0.12);
+export function CharacterFace({ appearance, size = 48 }: FaceProps) {
+  // Zoom so head/shoulders fill the square; torso is clipped out.
+  // Slightly under-zoomed (~8%) so the full face fits in the crop.
+  const zoom = 2.0;
+  const spriteSize = Math.round(size * zoom);
+  // Face sits lower than the frame top because of transparent padding above the head.
+  // Pull the sprite up so the face fills the crop (not the empty padding / hair tip).
+  const headCenterRatio = 0.5;
+  const offsetY = Math.round(size * 0.42 - spriteSize * headCenterRatio);
   const offsetX = -Math.round((spriteSize - size) / 2);
 
   return (
@@ -30,13 +33,18 @@ export function CharacterFace({
         {
           width: size,
           height: size,
-          borderRadius: size / 2,
-          borderWidth: bordered ? 2 : 0,
         },
       ]}
+      accessibilityRole="image"
     >
-      <View style={{ marginTop: offsetY, marginLeft: offsetX }}>
-        <AvatarPreview appearance={appearance} size={spriteSize} />
+      <View
+        style={{
+          width: spriteSize,
+          height: spriteSize,
+          transform: [{ translateY: offsetY }, { translateX: offsetX }],
+        }}
+      >
+        <AvatarPreview appearance={appearance} size={spriteSize} exactSize />
       </View>
     </View>
   );
@@ -53,14 +61,14 @@ type ConversationAvatarProps = {
  */
 export function ConversationAvatar({
   appearances,
-  size = 48,
+  size = 52,
 }: ConversationAvatarProps) {
   const faces = appearances.slice(0, 3);
   const extra = Math.max(0, appearances.length - 3);
 
   if (faces.length === 0) {
     return (
-      <View style={[styles.fallback, { width: size, height: size, borderRadius: size / 2 }]}>
+      <View style={[styles.fallback, { width: size, height: size }]}>
         <Text style={styles.fallbackText}>?</Text>
       </View>
     );
@@ -71,15 +79,15 @@ export function ConversationAvatar({
   }
 
   // Overlapped stack — front face largest, others tucked behind/beside.
-  const faceSize = Math.round(size * 0.72);
-  const step = Math.round(size * 0.28);
+  const faceSize = Math.round(size * 0.78);
+  const step = Math.round(size * 0.26);
 
   return (
     <View style={{ width: size, height: size }}>
       {faces.map((appearance, index) => {
         const fromBack = faces.length - 1 - index;
         const left = fromBack * step;
-        const top = fromBack * Math.round(step * 0.35);
+        const top = fromBack * Math.round(step * 0.3);
         return (
           <View
             key={index}
@@ -101,9 +109,8 @@ export function ConversationAvatar({
           style={[
             styles.extraBadge,
             {
-              width: Math.round(faceSize * 0.55),
-              height: Math.round(faceSize * 0.55),
-              borderRadius: radii.circle,
+              width: Math.round(faceSize * 0.5),
+              height: Math.round(faceSize * 0.5),
             },
           ]}
         >
@@ -117,22 +124,21 @@ export function ConversationAvatar({
 const styles = StyleSheet.create({
   faceClip: {
     overflow: "hidden",
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.borderStrong,
-    alignItems: "center",
-    justifyContent: "flex-start",
+    backgroundColor: "transparent",
+    borderRadius: 0,
   },
   fallback: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.accentSoft,
-    borderWidth: 2,
-    borderColor: colors.borderStrong,
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radii.sm,
   },
   fallbackText: {
     fontSize: 18,
     fontWeight: "700",
-    color: colors.ink,
+    color: colors.inkMuted,
   },
   stackSlot: {
     position: "absolute",
@@ -145,6 +151,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
     borderWidth: 1.5,
     borderColor: colors.borderStrong,
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
   },

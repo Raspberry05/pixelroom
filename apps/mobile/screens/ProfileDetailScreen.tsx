@@ -3,7 +3,7 @@ import {
   ROOM_STYLES,
   type RoomStyleId,
 } from "@pixelroom/core";
-import { AvatarPreview } from "../components/AvatarSprite";
+import { CharacterFace } from "../components/ConversationAvatar";
 import { TopNav } from "../components/TopNav";
 import { DEMO_USERS, isDemoUserKey, type DemoUserKey } from "../data/seed";
 import { colors, space, typography } from "../theme";
@@ -45,7 +45,7 @@ export function ProfileDetailScreen({
         {demo ? (
           <>
             <View style={styles.sprite}>
-              <AvatarPreview appearance={demo.character.appearance} size={96} />
+              <CharacterFace appearance={demo.character.appearance} size={96} />
             </View>
             <Text style={styles.name}>{demo.character.displayName}</Text>
             <Row label="Username" value={`@${demo.username}`} />
@@ -54,6 +54,7 @@ export function ProfileDetailScreen({
             <Row label="Kit" value={demo.character.appearance.kit} />
             <Row label="Hair" value={demo.character.appearance.hair} />
             <Row label="Outfit" value={demo.character.appearance.outfit} />
+            <Row label="Hat" value={demo.character.appearance.accessory ?? "none"} />
             <Row label="Pants" value={demo.character.appearance.pants} />
           </>
         ) : (

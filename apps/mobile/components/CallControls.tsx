@@ -6,6 +6,9 @@ type Props = {
   callerName: string;
   isMuted: boolean;
   isSpeakerOn: boolean;
+  /** 0–1 local mic level (visual only — you never hear yourself). */
+  micLevel?: number;
+  hasRemoteAudio?: boolean;
   onToggleMute: () => void;
   onToggleSpeaker: () => void;
   onEndCall: () => void;
@@ -16,6 +19,8 @@ export function CallControls({
   callerName,
   isMuted,
   isSpeakerOn,
+  micLevel = 0,
+  hasRemoteAudio = false,
   onToggleMute,
   onToggleSpeaker,
   onEndCall,
@@ -26,6 +31,8 @@ export function CallControls({
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const levelPct = Math.round(Math.min(1, Math.max(0, micLevel)) * 100);
+
   return (
     <View style={styles.container}>
       <View style={styles.statusBar}>
@@ -35,6 +42,23 @@ export function CallControls({
             {callerName}
           </Text>
           <Text style={styles.duration}>{formatDuration(duration)}</Text>
+        </View>
+        <View style={styles.meterRow}>
+          <Text style={styles.meterLabel}>
+            {isMuted ? "Mic muted" : "Mic live"}
+          </Text>
+          <View style={styles.meterTrack}>
+            <View
+              style={[
+                styles.meterFill,
+                { width: `${isMuted ? 0 : levelPct}%` },
+                levelPct > 8 && styles.meterFillHot,
+              ]}
+            />
+          </View>
+          <Text style={styles.meterHint}>
+            {hasRemoteAudio ? "Hearing peer" : "No peer audio yet"}
+          </Text>
         </View>
       </View>
 
@@ -98,6 +122,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     marginBottom: space.sm,
+    gap: space.sm,
   },
   callInfo: {
     flexDirection: "row",
@@ -121,6 +146,39 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.inkMuted,
     fontVariant: ["tabular-nums"],
+  },
+  meterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+  },
+  meterLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.inkMuted,
+    width: 64,
+  },
+  meterTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.bgDeep,
+    overflow: "hidden",
+  },
+  meterFill: {
+    height: "100%",
+    backgroundColor: colors.accent,
+    borderRadius: 3,
+  },
+  meterFillHot: {
+    backgroundColor: colors.accentHot,
+  },
+  meterHint: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.inkFaint,
+    maxWidth: 110,
+    textAlign: "right",
   },
   controls: {
     flexDirection: "row",

@@ -7,7 +7,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import type { ConversationPreview } from "../data/seed";
+import type { ConversationPreview, DemoUserKey } from "../data/seed";
 import { appearancesForConversation } from "../data/seed";
 import { ConversationAvatar } from "../components/ConversationAvatar";
 import { TopNav } from "../components/TopNav";
@@ -15,6 +15,7 @@ import { colors, radii, space, typography } from "../theme";
 
 type Props = {
   conversations: ConversationPreview[];
+  selfKey: DemoUserKey;
   syncLabel: string;
   onOpenRoom: (roomId: ConversationPreview["roomId"]) => void;
   onOpenNew: () => void;
@@ -22,6 +23,7 @@ type Props = {
 
 export function HallwayScreen({
   conversations,
+  selfKey,
   syncLabel,
   onOpenRoom,
   onOpenNew,
@@ -66,8 +68,12 @@ export function HallwayScreen({
             onPress={() => onOpenRoom(convo.roomId)}
           >
             <ConversationAvatar
-              appearances={appearancesForConversation(convo.memberKeys)}
-              size={48}
+              appearances={appearancesForConversation(
+                convo.memberKeys,
+                convo.kind,
+                selfKey,
+              )}
+              size={56}
             />
             <View style={styles.meta}>
               <View style={styles.rowTop}>

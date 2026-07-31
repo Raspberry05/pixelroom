@@ -35,11 +35,15 @@ import { DishResultModal } from "../components/cooking/DishResultModal";
 import { hasAppliance, getApplianceName } from "../data/applianceRequirements";
 import {
   calculateDirtLevel,
-  getAction,
-  hasAction,
   type RoomCleanlinessState,
   type MiniGameType,
 } from "../data/minigames";
+import {
+  bedIsMessy,
+  plantNeedsWater,
+  tvHasStatic,
+  type FurnitureCareState,
+} from "../data/furnitureCare";
 import { GROCERY_ITEMS } from "../data/groceryItems";
 import type { IngredientAmount, CookedDish } from "../data/recipes";
 import { getRequiredAppliance } from "../data/recipes";
@@ -66,6 +70,10 @@ import {
   type EditTool,
   type RoomDocument,
 } from "../data/roomLayout";
+import {
+  createTestLabRoomDocument,
+  isTestLabRoom,
+} from "../data/testLab";
 import { DEMO_USERS, isDemoUserKey, type DemoUserKey } from "../data/seed";
 import type { ChatLine } from "../sync/protocol";
 import { colors, radii, space } from "../theme";
@@ -83,7 +91,9 @@ const ACTION_CHIPS: { label: string; action: ActionKind; needsTarget?: boolean }
   { label: "*cook", action: "cook" },
   { label: "*fry", action: "fry" },
   { label: "*clean", action: "clean" },
-  { label: "*watch", action: "watch" },
+  { label: "*watch tv", action: "watch" },
+  { label: "*make bed", action: "makebed" },
+  { label: "*water plant", action: "water" },
   { label: "*hug", action: "hug", needsTarget: true },
   { label: "*dance", action: "dance" },
   { label: "*sing", action: "sing" },
@@ -97,11 +107,18 @@ function loadDocument(roomId: RoomId): RoomDocument {
   if (Platform.OS === "web" && typeof localStorage !== "undefined") {
     try {
       const raw = localStorage.getItem(layoutStorageKey(roomId));
-      if (raw) return normalizeRoomDocument(JSON.parse(raw));
+      if (raw) {
+        const saved = normalizeRoomDocument(JSON.parse(raw));
+        if (isTestLabRoom(roomId) && saved.furniture.length === 0) {
+          return createTestLabRoomDocument();
+        }
+        return saved;
+      }
     } catch {
       // ignore
     }
   }
+  if (isTestLabRoom(roomId)) return createTestLabRoomDocument();
   return createDefaultRoomDocument();
 }
 
@@ -140,6 +157,8 @@ type Props = {
   callDuration?: number;
   isMuted?: boolean;
   isSpeakerOn?: boolean;
+  micLevel?: number;
+  hasRemoteAudio?: boolean;
   onEndCall?: () => void;
   onToggleMute?: () => void;
   onToggleSpeaker?: () => void;
@@ -156,6 +175,8 @@ type Props = {
   peerTyping?: { userKey: DemoUserKey; name: string } | null;
   roomCleanliness: RoomCleanlinessState;
   onCleanRoom: () => void;
+  furnitureCare: FurnitureCareState;
+  onTendFurniture: (kind: "plant" | "bed" | "tv") => void;
 };
 
 export function RoomScreen({
@@ -182,6 +203,8 @@ export function RoomScreen({
   callDuration = 0,
   isMuted = false,
   isSpeakerOn = false,
+  micLevel = 0,
+  hasRemoteAudio = false,
   onEndCall,
   onToggleMute,
   onToggleSpeaker,
@@ -193,6 +216,8 @@ export function RoomScreen({
   peerTyping = null,
   roomCleanliness,
   onCleanRoom,
+  furnitureCare,
+  onTendFurniture,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
@@ -383,14 +408,17 @@ export function RoomScreen({
   }, [editing]);
 
   const actors = useMemo(() => {
-    const keys: DemoUserKey[] =
-      memberKeys && memberKeys.length > 0
-        ? memberKeys
-        : (Object.keys(DEMO_USERS) as DemoUserKey[]).filter((k) =>
-            room.memberIds.some((id) => id === DEMO_USERS[k].character.id),
-          );
+    // Prefer live room membership (both people in a DM). memberKeys is for
+    // hallway avatars and can be peer-only — never let that hide roommates.
+    const fromRoom = (Object.keys(DEMO_USERS) as DemoUserKey[]).filter((k) =>
+      room.memberIds.some((id) => id === DEMO_USERS[k].character.id),
+    );
+    const fromConvo = (memberKeys ?? []).filter((k) => k === selfKey || isDemoUserKey(k));
+    const merged = Array.from(new Set<DemoUserKey>([...fromRoom, ...fromConvo]));
     const resolved =
-      keys.length > 0 ? keys : (["alice", "bob"] as DemoUserKey[]);
+      merged.length > 0
+        ? merged
+        : ([selfKey] as DemoUserKey[]);
     return resolved.map((key) => ({
       characterId: DEMO_USERS[key].character.id,
       name: selfKey === key ? "You" : DEMO_USERS[key].character.displayName,
@@ -451,7 +479,7 @@ export function RoomScreen({
       }
       return;
     }
-    
+
     // Handle cooking action specially - show ingredient selector first
     if (action === "cook") {
       if (!isActionUnlocked(action, placedSprites)) {
@@ -463,10 +491,9 @@ export function RoomScreen({
       onSendAction(action, targetName);
       return;
     }
-    
+
     // Handle frying action specially - show ingredient selector first
     if (action === "fry") {
-      // Check for fryer appliance
       if (!hasAppliance(document, "fryer")) {
         setStatus("Need a Deep Fryer to fry food! 🍟");
         setTimeout(() => setStatus(null), 3000);
@@ -477,7 +504,37 @@ export function RoomScreen({
       onSendAction(action, targetName);
       return;
     }
-    
+
+    if (action === "watch") {
+      if (!isActionUnlocked(action, placedSprites)) {
+        setStatus(actionUnlockHint(action) ?? "Place a TV to watch");
+        return;
+      }
+      setActiveMiniGame("tv");
+      onSendAction(action, targetName);
+      return;
+    }
+
+    if (action === "makebed") {
+      if (!isActionUnlocked(action, placedSprites)) {
+        setStatus(actionUnlockHint(action) ?? "Place a bed to make");
+        return;
+      }
+      setActiveMiniGame("bedmaking");
+      onSendAction(action, targetName);
+      return;
+    }
+
+    if (action === "water") {
+      if (!isActionUnlocked(action, placedSprites)) {
+        setStatus(actionUnlockHint(action) ?? "Place a plant to water");
+        return;
+      }
+      setActiveMiniGame("watering");
+      onSendAction(action, targetName);
+      return;
+    }
+
     if (!isActionUnlocked(action, placedSprites)) {
       setStatus(actionUnlockHint(action) ?? `Need furniture for *${action}`);
       return;
@@ -529,7 +586,9 @@ export function RoomScreen({
   }
 
   function resetLayout() {
-    const fresh = createDefaultRoomDocument();
+    const fresh = isTestLabRoom(roomId)
+      ? createTestLabRoomDocument()
+      : createDefaultRoomDocument();
     setDocument(fresh);
     onChangeInventory(consumePlacedFromInventory(createStarterInventory(), [], 1));
     setSelectedId(null);
@@ -556,26 +615,11 @@ export function RoomScreen({
     setStatus(`Expanded ${side} (−${ROOM_EXPAND_COST}c)`);
   }
 
-  function handleFurnitureAction(furnitureId: string, sprite: string) {
-    const action = getAction(sprite as any);
-    if (!action) return;
-    
-    setSelectedFurnitureForAction(furnitureId);
-    
-    if (action.miniGameType === "cooking") {
-      // Show ingredient selector first for cooking
-      setShowIngredientSelector(true);
-    } else {
-      // Other mini-games start directly
-      setActiveMiniGame(action.miniGameType);
-    }
-  }
-
   function handleIngredientsSelected(ingredients: IngredientAmount[]) {
     // Check if user has required appliance for this recipe (only for cook mode)
     if (cookingMode === "cook") {
       const requiredAppliance = getRequiredAppliance(ingredients);
-      
+
       if (requiredAppliance && !hasAppliance(document, requiredAppliance)) {
         setShowIngredientSelector(false);
         setStatus(`Need a ${getApplianceName(requiredAppliance)} to cook this! 🍳`);
@@ -583,7 +627,7 @@ export function RoomScreen({
         return;
       }
     }
-    
+
     // Deduct ingredients from inventory
     let newInventory = inventory;
     for (const ing of ingredients) {
@@ -593,7 +637,7 @@ export function RoomScreen({
       }
     }
     onChangeInventory(newInventory);
-    
+
     // Save selected ingredients and start appropriate mini-game
     setSelectedIngredients(ingredients);
     setShowIngredientSelector(false);
@@ -606,18 +650,30 @@ export function RoomScreen({
   }
 
   function handleMiniGameComplete(dish?: CookedDish) {
+    const finished = activeMiniGame;
     setActiveMiniGame(null);
     setSelectedFurnitureForAction(null);
-    
-    if (activeMiniGame === "cleaning") {
+
+    if (finished === "cleaning") {
       onCleanRoom();
       setStatus("Room cleaned! ✨");
       setTimeout(() => setStatus(null), 2000);
-    } else if ((activeMiniGame === "cooking" || activeMiniGame === "frying") && dish) {
-      // Show cooking/frying result
+    } else if ((finished === "cooking" || finished === "frying") && dish) {
       setCookedDish(dish);
+    } else if (finished === "watering") {
+      onTendFurniture("plant");
+      setStatus("Plant watered! 🌱");
+      setTimeout(() => setStatus(null), 2000);
+    } else if (finished === "bedmaking") {
+      onTendFurniture("bed");
+      setStatus("Bed made! 🛏️");
+      setTimeout(() => setStatus(null), 2000);
+    } else if (finished === "tv") {
+      onTendFurniture("tv");
+      setStatus("TV tuned in! 📺");
+      setTimeout(() => setStatus(null), 2000);
     }
-    
+
     setSelectedIngredients([]);
   }
 
@@ -642,7 +698,7 @@ export function RoomScreen({
 
   return (
     <View style={styles.flex}>
-      {isOnCall && activeCall && (
+      {isOnCall && isSpeakerOn && activeCall && (
         <CallStatusBanner
           callerName={activeCall.callerName}
           duration={callDuration}
@@ -705,7 +761,7 @@ export function RoomScreen({
           onViewportCenterX={onMoveSelf}
           onVisibleUserKeys={setVisibleUserKeys}
           dirtLevel={currentDirtLevel}
-          onFurnitureAction={handleFurnitureAction}
+          furnitureCare={furnitureCare}
         />
         {(hudFeed.length > 0 || showPeerTyping) && (
           <View style={styles.hudChatOverlay} pointerEvents="none">
@@ -786,12 +842,19 @@ export function RoomScreen({
               }));
             }}
           />
-        ) : isOnCall && activeCall && onEndCall && onToggleMute && onToggleSpeaker ? (
+        ) : isOnCall &&
+          isSpeakerOn &&
+          activeCall &&
+          onEndCall &&
+          onToggleMute &&
+          onToggleSpeaker ? (
           <CallControls
             duration={callDuration}
             callerName={activeCall.callerName}
             isMuted={isMuted}
             isSpeakerOn={isSpeakerOn}
+            micLevel={micLevel}
+            hasRemoteAudio={hasRemoteAudio}
             onToggleMute={onToggleMute}
             onToggleSpeaker={onToggleSpeaker}
             onEndCall={onEndCall}
@@ -802,6 +865,27 @@ export function RoomScreen({
               <View style={styles.cleaningAlert}>
                 <Text style={styles.cleaningAlertText}>
                   🧹 Room is dirty! Use *clean to tidy up
+                </Text>
+              </View>
+            ) : null}
+            {!editing && plantNeedsWater(furnitureCare) ? (
+              <View style={styles.cleaningAlert}>
+                <Text style={styles.cleaningAlertText}>
+                  💧 Plant is thirsty! Use *water plant
+                </Text>
+              </View>
+            ) : null}
+            {!editing && tvHasStatic(furnitureCare) ? (
+              <View style={styles.cleaningAlert}>
+                <Text style={styles.cleaningAlertText}>
+                  📡 TV has static! Use *watch tv
+                </Text>
+              </View>
+            ) : null}
+            {!editing && bedIsMessy(furnitureCare) ? (
+              <View style={styles.cleaningAlert}>
+                <Text style={styles.cleaningAlertText}>
+                  🛏️ Bed is messy! Use *make bed
                 </Text>
               </View>
             ) : null}

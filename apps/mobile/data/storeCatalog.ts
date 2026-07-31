@@ -63,10 +63,10 @@ export const CLOTH_CATALOG: ClothStoreItem[] = [
     source: COZY_SHEET.source,
   },
   {
-    id: "cloth_purple_pants",
-    name: "Purple pants",
+    id: "cloth_purple_hat",
+    name: "Purple hat",
     price: 45,
-    patch: { kit: "cozy", pants: "purple" },
+    patch: { kit: "cozy", accessory: "purple" },
     source: COZY_SHEET.source,
   },
   ...SHEET_PRESETS.map((preset, index) => ({

@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import type { Appearance } from "@pixelroom/core";
@@ -38,6 +39,15 @@ type Props = {
 
 const COINS_KEY = "pixelroom.coins";
 const THUMB = 48 * WORLD_SCALE;
+const GRID_PAD = space.lg;
+const GRID_GAP = space.md;
+
+/** Phone 2 · tablet 3 · desktop 4 */
+function columnsForWidth(width: number): number {
+  if (width >= 1100) return 4;
+  if (width >= 720) return 3;
+  return 2;
+}
 
 export function loadCoins(fallback = 500): number {
   if (Platform.OS === "web" && typeof localStorage !== "undefined") {
@@ -71,6 +81,13 @@ export function StoreScreen({
 }: Props) {
   const [tab, setTab] = useState<StoreTabId>("furniture");
   const ownedSet = useMemo(() => new Set(ownedClothes), [ownedClothes]);
+  const { width: windowWidth } = useWindowDimensions();
+  const columns = columnsForWidth(windowWidth);
+  const cardWidth = useMemo(() => {
+    const inner = windowWidth - GRID_PAD * 2;
+    const gaps = GRID_GAP * (columns - 1);
+    return Math.floor((inner - gaps) / columns);
+  }, [windowWidth, columns]);
 
   function buyInventory(id: string, price: number) {
     if (coins < price) return;
@@ -80,7 +97,7 @@ export function StoreScreen({
 
   function buyGrocery(item: GroceryItem) {
     if (coins < item.price) return;
-    
+
     // Warn about fridge requirement (but still allow purchase)
     if (item.requiresFridge) {
       const owned = getQty(inventory, item.id);
@@ -90,7 +107,7 @@ export function StoreScreen({
         return;
       }
     }
-    
+
     onChangeCoins(coins - item.price);
     onChangeInventory(refund(inventory, item.id, 1));
   }
@@ -132,7 +149,7 @@ export function StoreScreen({
               const owned = getQty(inventory, item.id);
               const canBuy = coins >= item.price;
               return (
-                <View key={item.id} style={styles.card}>
+                <View key={item.id} style={[styles.card, { width: cardWidth }]}>
                   <View style={styles.thumbWrap}>
                     <Text style={styles.groceryEmoji}>{item.emoji}</Text>
                   </View>
@@ -153,52 +170,52 @@ export function StoreScreen({
             })
           : tab === "clothes"
             ? CLOTH_CATALOG.map((item) => {
-              const owned = ownedSet.has(item.id);
-              const canBuy = owned || coins >= item.price;
-              return (
-                <View key={item.id} style={styles.card}>
-                  <View style={styles.thumbWrap}>
-                    <PixelImage source={item.source} width={THUMB} height={THUMB} />
+                const owned = ownedSet.has(item.id);
+                const canBuy = owned || coins >= item.price;
+                return (
+                  <View key={item.id} style={[styles.card, { width: cardWidth }]}>
+                    <View style={styles.thumbWrap}>
+                      <PixelImage source={item.source} width={THUMB} height={THUMB} />
+                    </View>
+                    <Text style={styles.name}>{item.name}</Text>
+                    <Text style={styles.meta}>{owned ? "owned · equip" : "outfit"}</Text>
+                    <Pressable
+                      style={[styles.btn, !canBuy && styles.btnDisabled]}
+                      onPress={() => buyCloth(item)}
+                      disabled={!canBuy}
+                    >
+                      <Text style={styles.btnText}>
+                        {owned ? "Equip" : `Buy · ${item.price}c`}
+                      </Text>
+                    </Pressable>
                   </View>
-                  <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>{owned ? "owned · equip" : "outfit"}</Text>
-                  <Pressable
-                    style={[styles.btn, !canBuy && styles.btnDisabled]}
-                    onPress={() => buyCloth(item)}
-                    disabled={!canBuy}
-                  >
-                    <Text style={styles.btnText}>
-                      {owned ? "Equip" : `Buy · ${item.price}c`}
-                    </Text>
-                  </Pressable>
-                </View>
-              );
-            })
+                );
+              })
             : inventoryItems.map((item) => {
-              const owned = getQty(inventory, item.id);
-              const canBuy = coins >= item.price;
-              const source = spriteSourceForItem(item);
-              return (
-                <View key={item.id} style={styles.card}>
-                  <View style={styles.thumbWrap}>
-                    {source ? (
-                      <PixelImage source={source} width={THUMB} height={THUMB} />
-                    ) : (
-                      <View style={styles.swatchFallback} />
-                    )}
+                const owned = getQty(inventory, item.id);
+                const canBuy = coins >= item.price;
+                const source = spriteSourceForItem(item);
+                return (
+                  <View key={item.id} style={[styles.card, { width: cardWidth }]}>
+                    <View style={styles.thumbWrap}>
+                      {source ? (
+                        <PixelImage source={source} width={THUMB} height={THUMB} />
+                      ) : (
+                        <View style={styles.swatchFallback} />
+                      )}
+                    </View>
+                    <Text style={styles.name}>{item.name}</Text>
+                    <Text style={styles.meta}>owned ×{owned}</Text>
+                    <Pressable
+                      style={[styles.btn, !canBuy && styles.btnDisabled]}
+                      onPress={() => buyInventory(item.id, item.price)}
+                      disabled={!canBuy}
+                    >
+                      <Text style={styles.btnText}>Buy +1 · {item.price}c</Text>
+                    </Pressable>
                   </View>
-                  <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>owned ×{owned}</Text>
-                  <Pressable
-                    style={[styles.btn, !canBuy && styles.btnDisabled]}
-                    onPress={() => buyInventory(item.id, item.price)}
-                    disabled={!canBuy}
-                  >
-                    <Text style={styles.btnText}>Buy +1 · {item.price}c</Text>
-                  </Pressable>
-                </View>
-              );
-            })}
+                );
+              })}
       </ScrollView>
     </View>
   );
@@ -233,13 +250,12 @@ const styles = StyleSheet.create({
   },
   tabTextOn: { color: colors.accent },
   grid: {
-    padding: space.lg,
+    padding: GRID_PAD,
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: space.md,
+    gap: GRID_GAP,
   },
   card: {
-    width: "47%",
     backgroundColor: colors.surface,
     borderWidth: 2,
     borderColor: colors.borderStrong,

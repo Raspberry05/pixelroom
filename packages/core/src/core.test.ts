@@ -33,6 +33,21 @@ describe("parseCommand", () => {
       targetName: null,
       raw: "*watch",
     });
+    expect(parseCommand("*watch tv")).toEqual({
+      action: "watch",
+      targetName: null,
+      raw: "*watch tv",
+    });
+    expect(parseCommand("*make bed")).toEqual({
+      action: "makebed",
+      targetName: null,
+      raw: "*make bed",
+    });
+    expect(parseCommand("*water plant")).toEqual({
+      action: "water",
+      targetName: null,
+      raw: "*water plant",
+    });
     expect(parseCommand("*kiss @Sam")).toEqual({
       action: "kiss",
       targetName: "Sam",

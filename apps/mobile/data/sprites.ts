@@ -17,7 +17,8 @@ export const COZY_SHEET = {
     shirt: 4,
     pantsBlue: 6,
     shoes: 8,
-    pantsPurple: 10,
+    /** Purple hat (was mislabeled as pants). */
+    hat: 10,
   },
 } as const;
 

@@ -1,12 +1,12 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { PixelImage } from "../PixelImage";
 import {
-  CELL_PX,
   drawnSize,
   type PlacedFurniture,
   SPRITE_BY_ID,
 } from "../../data/roomLayout";
-import { colors, radii, space } from "../../theme";
+import type { FurnitureCareIndicator } from "../../data/furnitureCare";
+import { colors } from "../../theme";
 
 export const FLOOR_RATIO = 0.48;
 
@@ -21,10 +21,8 @@ type Props = {
   onTapPacked?: (item: PlacedFurniture) => void;
   /** Whether we're in editing mode (disables tap for unpacking). */
   editing?: boolean;
-  /** Whether this furniture has an interactive action. */
-  hasAction?: boolean;
-  /** Called when user taps the action button. */
-  onTapAction?: () => void;
+  /** Needs attention: dying plant / TV static / messy bed. */
+  careIndicator?: FurnitureCareIndicator | null;
 };
 
 /**
@@ -38,8 +36,7 @@ export function FurniturePiece({
   dragOffset,
   onTapPacked,
   editing,
-  hasAction,
-  onTapAction,
+  careIndicator = null,
 }: Props) {
   const meta = SPRITE_BY_ID[item.sprite];
   if (!meta) return null;
@@ -74,7 +71,27 @@ export function FurniturePiece({
       </View>
     </View>
   ) : (
-    <PixelImage source={meta.source} width={drawnW} height={drawnH} />
+    <View style={styles.spriteWrap}>
+      <PixelImage source={meta.source} width={drawnW} height={drawnH} />
+      {careIndicator === "dying" ? (
+        <View style={[styles.careOverlay, styles.dyingOverlay]} pointerEvents="none">
+          <Text style={styles.careBadge}>💧</Text>
+          <View style={styles.wiltVeil} />
+        </View>
+      ) : null}
+      {careIndicator === "static" ? (
+        <View style={[styles.careOverlay, styles.staticOverlay]} pointerEvents="none">
+          <Text style={styles.staticNoise}>░▒▓░</Text>
+          <Text style={styles.careBadge}>📡</Text>
+        </View>
+      ) : null}
+      {careIndicator === "messy" ? (
+        <View style={[styles.careOverlay, styles.messyOverlay]} pointerEvents="none">
+          <Text style={styles.messyLines}>≋≋</Text>
+          <Text style={styles.careBadge}>🛏️</Text>
+        </View>
+      ) : null}
+    </View>
   );
 
   const Wrapper = isPacked && !editing ? Pressable : View;
@@ -96,11 +113,6 @@ export function FurniturePiece({
       onPress={isPacked && !editing ? () => onTapPacked?.(item) : undefined}
     >
       {content}
-      {hasAction && onTapAction && !isPacked && (
-        <Pressable style={styles.actionBtn} onPress={onTapAction}>
-          <Text style={styles.actionBtnText}>Use</Text>
-        </Pressable>
-      )}
     </Wrapper>
   );
 }
@@ -108,6 +120,11 @@ export function FurniturePiece({
 const styles = StyleSheet.create({
   piece: {
     position: "absolute",
+  },
+  spriteWrap: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
   },
   selected: {
     borderWidth: 2,
@@ -146,25 +163,43 @@ const styles = StyleSheet.create({
     backgroundColor: "#8B6F47",
     borderRadius: 1,
   },
-  actionBtn: {
-    position: "absolute",
-    bottom: -6,
-    left: "50%",
-    transform: [{ translateX: -20 }],
-    backgroundColor: colors.accent,
-    borderWidth: 2,
-    borderColor: colors.borderStrong,
-    borderRadius: radii.pill,
-    paddingVertical: 2,
-    paddingHorizontal: space.sm,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+  careOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingTop: 2,
   },
-  actionBtnText: {
-    fontSize: 11,
+  dyingOverlay: {
+    backgroundColor: "rgba(120, 80, 40, 0.28)",
+  },
+  wiltVeil: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(90, 60, 20, 0.18)",
+  },
+  staticOverlay: {
+    backgroundColor: "rgba(20, 20, 28, 0.45)",
+  },
+  staticNoise: {
+    position: "absolute",
+    bottom: "28%",
+    fontSize: 9,
+    fontWeight: "900",
+    color: "rgba(220, 220, 230, 0.85)",
+    letterSpacing: -1,
+  },
+  messyOverlay: {
+    backgroundColor: "rgba(80, 60, 40, 0.2)",
+  },
+  messyLines: {
+    marginTop: 4,
+    fontSize: 14,
+    color: "rgba(60, 40, 30, 0.7)",
     fontWeight: "700",
-    color: colors.surfaceRaised,
+  },
+  careBadge: {
+    fontSize: 12,
+    textShadowColor: "rgba(0,0,0,0.35)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
 });

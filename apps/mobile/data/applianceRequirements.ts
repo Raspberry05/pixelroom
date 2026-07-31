@@ -40,15 +40,12 @@ export function hasAppliance(
   document: RoomDocument,
   appliance: ApplianceType | "fridge"
 ): boolean {
-  // For now, check if any "appliance" furniture exists as a placeholder
-  // In the future, this should check for specific appliance types
-  if (appliance === "fridge") {
-    // Check for fridge sprite (when implemented)
-    // For now, we'll be lenient and return true if they have any appliance
-    return document.furniture.some((f) => f.sprite === "appliance");
+  // Kitchen "appliance" stands in for every cooking station until specialized
+  // sprites (fryer, oven, …) ship — so Test Lab / cook+fry flows stay testable.
+  if (document.furniture.some((f) => f.sprite === "appliance")) {
+    return true;
   }
-  
-  // Check if they have the required cooking appliance
+
   return document.furniture.some((f) => {
     const furnitureType = FURNITURE_TO_APPLIANCE[f.sprite];
     return furnitureType === appliance;
@@ -60,19 +57,24 @@ export function hasAppliance(
  */
 export function getAvailableAppliances(document: RoomDocument): (ApplianceType | "fridge")[] {
   const appliances = new Set<ApplianceType | "fridge">();
-  
+
   for (const furniture of document.furniture) {
     const applianceType = FURNITURE_TO_APPLIANCE[furniture.sprite];
     if (applianceType) {
       appliances.add(applianceType);
     }
   }
-  
-  // For now, assume any appliance can act as a fridge
+
+  // Generic appliance unlocks the full kitchen set for demos / Test Lab.
   if (document.furniture.some((f) => f.sprite === "appliance")) {
     appliances.add("fridge");
+    appliances.add("stove");
+    appliances.add("fryer");
+    appliances.add("oven");
+    appliances.add("microwave");
+    appliances.add("blender");
   }
-  
+
   return Array.from(appliances);
 }
 

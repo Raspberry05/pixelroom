@@ -60,7 +60,8 @@ import { CharacterSprite } from "./CharacterSprite";
 import { FurniturePiece, FLOOR_RATIO } from "./FurniturePiece";
 import { UnpackingMiniGame } from "./UnpackingMiniGame";
 import { DirtOverlay } from "./DirtOverlay";
-import { hasAction } from "../../data/minigames";
+import type { FurnitureCareState } from "../../data/furnitureCare";
+import { careIndicatorForSprite } from "../../data/furnitureCare";
 
 type Actor = {
   characterId: CharacterId;
@@ -98,8 +99,8 @@ type Props = {
   onVisibleUserKeys?: (keys: string[]) => void;
   /** Current dirt level (0-3) for displaying dirt overlays. */
   dirtLevel?: number;
-  /** Called when user taps a furniture action button. */
-  onFurnitureAction?: (furnitureId: string, sprite: string) => void;
+  /** Per-room plant / TV / bed care timestamps for indicators. */
+  furnitureCare?: FurnitureCareState | null;
 };
 
 export { FLOOR_RATIO };
@@ -178,7 +179,7 @@ export function RoomStage({
   onViewportCenterX,
   onVisibleUserKeys,
   dirtLevel = 0,
-  onFurnitureAction,
+  furnitureCare = null,
 }: Props) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [dragId, setDragId] = useState<string | null>(null);
@@ -1120,8 +1121,11 @@ export function RoomStage({
                   }
                   onTapPacked={handleTapPacked}
                   editing={editing}
-                  hasAction={!editing && !item.packed && hasAction(item.sprite) && item.sprite !== "appliance"}
-                  onTapAction={!editing && onFurnitureAction && item.sprite !== "appliance" ? () => onFurnitureAction(item.id, item.sprite) : undefined}
+                  careIndicator={
+                    !editing && !item.packed && furnitureCare
+                      ? careIndicatorForSprite(item.sprite, furnitureCare)
+                      : null
+                  }
                 />
               ))
             : null}

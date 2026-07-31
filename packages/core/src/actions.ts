@@ -3,6 +3,7 @@ import type { ActionKind } from "./types.js";
 /** Actions players can invoke with `*command` syntax. */
 export const COMMAND_ACTIONS = [
   "cook",
+  "fry",
   "clean",
   "hug",
   "kiss",
@@ -12,6 +13,8 @@ export const COMMAND_ACTIONS = [
   "dance",
   "sing",
   "watch",
+  "water",
+  "makebed",
 ] as const satisfies readonly ActionKind[];
 
 export type CommandAction = (typeof COMMAND_ACTIONS)[number];
@@ -47,12 +50,15 @@ export const ACTION_COOLDOWN_MS: Record<ActionKind, number> = {
   sleep: 0,
   sit: 48_000,
   cook: 42_000,
+  fry: 36_000,
   clean: 42_000,
   wave: 16_000,
   talk: 12_000,
   sing: 36_000,
   dance: 28_000,
   watch: 24_000,
+  water: 28_000,
+  makebed: 28_000,
   hug: 22_000,
   kiss: 22_000,
 };

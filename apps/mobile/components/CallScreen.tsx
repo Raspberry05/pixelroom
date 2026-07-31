@@ -1,27 +1,40 @@
 import { useEffect, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View, Animated } from "react-native";
-import { colors, radii, space, typography } from "../theme";
+import { colors, radii, space } from "../theme";
 
 export type CallState = "calling" | "ringing" | "connected" | "ended";
 
 type Props = {
   visible: boolean;
   callerName: string;
+  /** e.g. "From Alice" on group calls */
+  subtitle?: string | null;
   callState: CallState;
   duration: number;
   onEndCall: () => void;
   onAcceptCall?: () => void;
   isIncoming?: boolean;
+  isGroup?: boolean;
+  isMuted?: boolean;
+  isSpeakerOn?: boolean;
+  onToggleMute?: () => void;
+  onToggleSpeaker?: () => void;
 };
 
 export function CallScreen({
   visible,
   callerName,
+  subtitle,
   callState,
   duration,
   onEndCall,
   onAcceptCall,
   isIncoming = false,
+  isGroup = false,
+  isMuted = false,
+  isSpeakerOn = false,
+  onToggleMute,
+  onToggleSpeaker,
 }: Props) {
   const [pulseAnim] = useState(new Animated.Value(1));
 
@@ -55,9 +68,12 @@ export function CallScreen({
   const getStatusText = (): string => {
     switch (callState) {
       case "calling":
-        return "Calling...";
+        return isGroup ? "Calling group..." : "Calling...";
       case "ringing":
-        return isIncoming ? "Incoming Call" : "Ringing...";
+        if (isIncoming) {
+          return isGroup ? "Incoming group call" : "Incoming Call";
+        }
+        return "Ringing...";
       case "connected":
         return formatDuration(duration);
       case "ended":
@@ -84,10 +100,20 @@ export function CallScreen({
             ]}
           >
             <Text style={styles.avatarText}>
-              {callerName.charAt(0).toUpperCase()}
+              {isGroup ? "👥" : callerName.charAt(0).toUpperCase()}
             </Text>
           </Animated.View>
           <Text style={styles.callerName}>{callerName}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+          {callState === "connected" ? (
+            <Text style={styles.audioHint}>
+              {isMuted
+                ? "Mic muted"
+                : "Mic is sending — you won’t hear yourself"}
+              {"\n"}
+              Speak into the mic; open a second tab as another user to hear them.
+            </Text>
+          ) : null}
         </View>
 
         <View style={styles.controls}>
@@ -124,12 +150,26 @@ export function CallScreen({
 
         {callState === "connected" && (
           <View style={styles.features}>
-            <Pressable style={styles.featureBtn}>
-              <Text style={styles.featureIcon}>🔇</Text>
-              <Text style={styles.featureLabel}>Mute</Text>
+            <Pressable
+              style={[styles.featureBtn, isMuted && styles.featureBtnActive]}
+              onPress={onToggleMute}
+              accessibilityLabel={isMuted ? "Unmute" : "Mute"}
+              accessibilityRole="button"
+            >
+              <Text style={styles.featureIcon}>{isMuted ? "🔇" : "🎤"}</Text>
+              <Text style={styles.featureLabel}>
+                {isMuted ? "Muted" : "Mute"}
+              </Text>
             </Pressable>
-            <Pressable style={styles.featureBtn}>
-              <Text style={styles.featureIcon}>🔊</Text>
+            <Pressable
+              style={[styles.featureBtn, isSpeakerOn && styles.featureBtnActive]}
+              onPress={onToggleSpeaker}
+              accessibilityLabel={isSpeakerOn ? "Speaker off" : "Speaker on"}
+              accessibilityRole="button"
+            >
+              <Text style={styles.featureIcon}>
+                {isSpeakerOn ? "🔊" : "🔈"}
+              </Text>
               <Text style={styles.featureLabel}>Speaker</Text>
             </Pressable>
           </View>
@@ -189,6 +229,23 @@ const styles = StyleSheet.create({
     color: colors.surfaceRaised,
     textAlign: "center",
   },
+  subtitle: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: colors.surfaceRaised,
+    opacity: 0.85,
+    textAlign: "center",
+  },
+  audioHint: {
+    marginTop: space.md,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+    color: colors.surfaceRaised,
+    opacity: 0.75,
+    textAlign: "center",
+    maxWidth: 280,
+  },
   controls: {
     flexDirection: "row",
     justifyContent: "center",
@@ -237,6 +294,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: space.xs,
     padding: space.md,
+    borderRadius: radii.lg,
+  },
+  featureBtnActive: {
+    backgroundColor: "rgba(255,255,255,0.18)",
   },
   featureIcon: {
     fontSize: 32,
