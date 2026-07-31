@@ -75,9 +75,9 @@ export async function importAndMatchContacts(
       newContacts.push({
         characterId: `imported_${device.id}`,
         displayName: device.name,
+        username: device.name.toLowerCase().replace(/\s+/g, ""),
+        phone: device.phoneNumbers?.[0] ?? "",
         userKey: device.id,
-        phoneNumber: device.phoneNumbers?.[0],
-        email: device.emails?.[0],
       });
     }
   }
