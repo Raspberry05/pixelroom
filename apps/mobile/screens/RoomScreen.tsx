@@ -23,6 +23,16 @@ import { CallButton } from "../components/CallButton";
 import { CallControls } from "../components/CallControls";
 import { CallStatusBanner } from "../components/CallStatusBanner";
 import type { CallState } from "../components/CallScreen";
+import { DirtOverlay } from "../components/room/DirtOverlay";
+import { CookingMiniGame } from "../components/minigames/CookingMiniGame";
+import { CleaningMiniGame } from "../components/minigames/CleaningMiniGame";
+import {
+  calculateDirtLevel,
+  getAction,
+  hasAction,
+  type RoomCleanlinessState,
+  type MiniGameType,
+} from "../data/minigames";
 import {
   actionUnlockHint,
   furnitureSpritesInRoom,
@@ -130,6 +140,8 @@ type Props = {
   onMoveSelf?: (x: number) => void;
   onTyping?: (isTyping: boolean) => void;
   peerTyping?: { userKey: DemoUserKey; name: string } | null;
+  roomCleanliness: RoomCleanlinessState;
+  onCleanRoom: () => void;
 };
 
 export function RoomScreen({
@@ -165,6 +177,8 @@ export function RoomScreen({
   onMoveSelf,
   onTyping,
   peerTyping = null,
+  roomCleanliness,
+  onCleanRoom,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
@@ -173,6 +187,8 @@ export function RoomScreen({
   const [document, setDocument] = useState<RoomDocument>(() => loadDocument(roomId));
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [activeMiniGame, setActiveMiniGame] = useState<MiniGameType | null>(null);
+  const [selectedFurnitureForAction, setSelectedFurnitureForAction] = useState<string | null>(null);
   const peerKey =
     memberKeys?.find((k) => k !== selfKey) ??
     (selfKey === "alice" ? "bob" : "alice");
@@ -391,6 +407,15 @@ export function RoomScreen({
   const activeCount = Object.values(room.memberState).filter((m) => m.presence === "active")
     .length;
 
+  const isOnCall = callState === "calling" || callState === "ringing" || callState === "connected";
+  
+  // Calculate dirt level based on last activity time
+  const currentDirtLevel = useMemo(() => {
+    return calculateDirtLevel(roomCleanliness.lastActivityAt);
+  }, [roomCleanliness.lastActivityAt]);
+  
+  const needsCleaning = currentDirtLevel >= 2;
+
   const placedSprites = useMemo(() => furnitureSpritesInRoom(document), [document]);
 
   const savedLabel =
@@ -475,7 +500,32 @@ export function RoomScreen({
     setStatus(`Expanded ${side} (−${ROOM_EXPAND_COST}c)`);
   }
 
-  const isOnCall = activeCall != null && (callState === "calling" || callState === "ringing" || callState === "connected");
+  function handleFurnitureAction(furnitureId: string, sprite: string) {
+    const action = getAction(sprite as any);
+    if (!action) return;
+    
+    setSelectedFurnitureForAction(furnitureId);
+    setActiveMiniGame(action.miniGameType);
+  }
+
+  function handleMiniGameComplete() {
+    setActiveMiniGame(null);
+    setSelectedFurnitureForAction(null);
+    if (activeMiniGame === "cleaning") {
+      onCleanRoom();
+      setStatus("Room cleaned! ✨");
+      setTimeout(() => setStatus(null), 2000);
+    }
+  }
+
+  function handleMiniGameCancel() {
+    setActiveMiniGame(null);
+    setSelectedFurnitureForAction(null);
+  }
+
+  function promptCleanRoom() {
+    setActiveMiniGame("cleaning");
+  }
 
   return (
     <View style={styles.flex}>
@@ -541,6 +591,8 @@ export function RoomScreen({
           expandCost={ROOM_EXPAND_COST}
           onViewportCenterX={onMoveSelf}
           onVisibleUserKeys={setVisibleUserKeys}
+          dirtLevel={currentDirtLevel}
+          onFurnitureAction={handleFurnitureAction}
         />
         {(hudFeed.length > 0 || showPeerTyping) && (
           <View style={styles.hudChatOverlay} pointerEvents="none">
@@ -633,6 +685,13 @@ export function RoomScreen({
           />
         ) : (
           <View style={styles.hud}>
+            {needsCleaning && !editing ? (
+              <Pressable onPress={promptCleanRoom} style={styles.cleaningAlert}>
+                <Text style={styles.cleaningAlertText}>
+                  🧹 Room is dirty! Tap to clean
+                </Text>
+              </Pressable>
+            ) : null}
             {status ? <Text style={styles.statusHint}>{status}</Text> : null}
             <ScrollView
               horizontal
@@ -683,6 +742,19 @@ export function RoomScreen({
           </View>
         )}
       </View>
+
+      {/* Mini-game modals */}
+      <CleaningMiniGame
+        visible={activeMiniGame === "cleaning"}
+        dirtLevel={currentDirtLevel}
+        onComplete={handleMiniGameComplete}
+        onCancel={handleMiniGameCancel}
+      />
+      <CookingMiniGame
+        visible={activeMiniGame === "cooking"}
+        onComplete={handleMiniGameComplete}
+        onCancel={handleMiniGameCancel}
+      />
     </View>
   );
 }
@@ -833,6 +905,22 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 12, fontWeight: "700", color: colors.ink },
   chipTextLocked: { color: colors.inkFaint },
+  cleaningAlert: {
+    backgroundColor: colors.accentSoft,
+    borderWidth: 2,
+    borderColor: colors.accent,
+    borderRadius: radii.lg,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    marginHorizontal: space.md,
+    marginBottom: space.sm,
+    alignItems: "center",
+  },
+  cleaningAlertText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.ink,
+  },
   statusHint: {
     paddingHorizontal: space.md,
     paddingTop: space.sm,

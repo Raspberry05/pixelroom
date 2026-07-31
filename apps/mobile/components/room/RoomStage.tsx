@@ -59,6 +59,8 @@ import { PixelImage } from "../PixelImage";
 import { CharacterSprite } from "./CharacterSprite";
 import { FurniturePiece, FLOOR_RATIO } from "./FurniturePiece";
 import { UnpackingMiniGame } from "./UnpackingMiniGame";
+import { DirtOverlay } from "./DirtOverlay";
+import { hasAction } from "../../data/minigames";
 
 type Actor = {
   characterId: CharacterId;
@@ -94,6 +96,10 @@ type Props = {
   onViewportCenterX?: (logicalX: number) => void;
   /** User keys whose characters are currently visible in the viewport. */
   onVisibleUserKeys?: (keys: string[]) => void;
+  /** Current dirt level (0-3) for displaying dirt overlays. */
+  dirtLevel?: number;
+  /** Called when user taps a furniture action button. */
+  onFurnitureAction?: (furnitureId: string, sprite: string) => void;
 };
 
 export { FLOOR_RATIO };
@@ -171,6 +177,8 @@ export function RoomStage({
   expandCost,
   onViewportCenterX,
   onVisibleUserKeys,
+  dirtLevel = 0,
+  onFurnitureAction,
 }: Props) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [dragId, setDragId] = useState<string | null>(null);
@@ -1112,6 +1120,8 @@ export function RoomStage({
                   }
                   onTapPacked={handleTapPacked}
                   editing={editing}
+                  hasAction={!editing && !item.packed && hasAction(item.sprite)}
+                  onTapAction={!editing && onFurnitureAction ? () => onFurnitureAction(item.id, item.sprite) : undefined}
                 />
               ))
             : null}
@@ -1163,6 +1173,15 @@ export function RoomStage({
                 );
               })
             : null}
+          
+          {/* Dirt overlay */}
+          {dirtLevel > 0 && ready && (
+            <DirtOverlay
+              dirtLevel={dirtLevel}
+              stageWidth={worldW}
+              stageHeight={size.height}
+            />
+          )}
           </Pressable>
 
           {sideWall("right")}

@@ -18,6 +18,11 @@ import {
 } from "./services/notifications";
 import { importAndMatchContacts } from "./services/contacts";
 import {
+  calculateDirtLevel,
+  createCleanlinessState,
+  type RoomCleanlinessState,
+} from "./data/minigames";
+import {
   DEMO_USERS,
   contactsFor,
   getPeerKey,
@@ -137,6 +142,9 @@ export default function App() {
   
   // Notification state
   const [notification, setNotification] = useState<Notification | null>(null);
+  
+  // Room cleanliness state (per room)
+  const [roomCleanliness, setRoomCleanliness] = useState<Record<string, RoomCleanlinessState>>({});
 
   useEffect(() => {
     saveInventory(inventory);
@@ -252,6 +260,41 @@ export default function App() {
     );
   }
 
+  function getOrCreateRoomCleanliness(roomId: RoomId): RoomCleanlinessState {
+    const key = String(roomId);
+    if (!roomCleanliness[key]) {
+      const newState = createCleanlinessState();
+      setRoomCleanliness((prev) => ({ ...prev, [key]: newState }));
+      return newState;
+    }
+    return roomCleanliness[key];
+  }
+
+  function updateRoomActivity(roomId: RoomId) {
+    const key = String(roomId);
+    setRoomCleanliness((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] ?? createCleanlinessState()),
+        lastActivityAt: Date.now(),
+        dirtLevel: 0,
+      },
+    }));
+  }
+
+  function cleanRoom(roomId: RoomId) {
+    const key = String(roomId);
+    setRoomCleanliness((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] ?? createCleanlinessState()),
+        lastCleanedAt: Date.now(),
+        lastActivityAt: Date.now(),
+        dirtLevel: 0,
+      },
+    }));
+  }
+
   async function syncPhoneContacts() {
     try {
       const newContacts = await importAndMatchContacts(contacts);
@@ -351,6 +394,7 @@ export default function App() {
         onLeave={() => sync.leaveRoom(String(top.roomId))}
         onSendChat={(text) => {
           sync.sendChat(String(top.roomId), text);
+          updateRoomActivity(top.roomId);
           setConversations((prev) =>
             prev.map((c) =>
               String(c.roomId) === String(top.roomId)
@@ -359,9 +403,12 @@ export default function App() {
             ),
           );
         }}
-        onSendAction={(action, targetName) =>
-          sync.sendAction(String(top.roomId), action, targetName)
-        }
+        onSendAction={(action, targetName) => {
+          sync.sendAction(String(top.roomId), action, targetName);
+          updateRoomActivity(top.roomId);
+        }}
+        roomCleanliness={getOrCreateRoomCleanliness(top.roomId)}
+        onCleanRoom={() => cleanRoom(top.roomId)}
         onStartCall={() => {
           const peerKey = convo?.peerUserKey ?? getPeerKey(userKey);
           const peerName = convo?.title ?? "User";

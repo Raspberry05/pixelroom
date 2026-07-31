@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { PixelImage } from "../PixelImage";
 import {
   CELL_PX,
@@ -6,7 +6,7 @@ import {
   type PlacedFurniture,
   SPRITE_BY_ID,
 } from "../../data/roomLayout";
-import { colors } from "../../theme";
+import { colors, radii, space } from "../../theme";
 
 export const FLOOR_RATIO = 0.48;
 
@@ -21,6 +21,10 @@ type Props = {
   onTapPacked?: (item: PlacedFurniture) => void;
   /** Whether we're in editing mode (disables tap for unpacking). */
   editing?: boolean;
+  /** Whether this furniture has an interactive action. */
+  hasAction?: boolean;
+  /** Called when user taps the action button. */
+  onTapAction?: () => void;
 };
 
 /**
@@ -34,6 +38,8 @@ export function FurniturePiece({
   dragOffset,
   onTapPacked,
   editing,
+  hasAction,
+  onTapAction,
 }: Props) {
   const meta = SPRITE_BY_ID[item.sprite];
   if (!meta) return null;
@@ -90,6 +96,11 @@ export function FurniturePiece({
       onPress={isPacked && !editing ? () => onTapPacked?.(item) : undefined}
     >
       {content}
+      {hasAction && onTapAction && !isPacked && (
+        <Pressable style={styles.actionBtn} onPress={onTapAction}>
+          <Text style={styles.actionBtnText}>Use</Text>
+        </Pressable>
+      )}
     </Wrapper>
   );
 }
@@ -134,5 +145,26 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: "#8B6F47",
     borderRadius: 1,
+  },
+  actionBtn: {
+    position: "absolute",
+    bottom: -6,
+    left: "50%",
+    transform: [{ translateX: -20 }],
+    backgroundColor: colors.accent,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.pill,
+    paddingVertical: 2,
+    paddingHorizontal: space.sm,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  actionBtnText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.surfaceRaised,
   },
 });
