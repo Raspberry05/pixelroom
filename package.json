@@ -2,7 +2,7 @@
   "name": "pixelroom",
   "private": true,
   "version": "0.1.0",
-  "description": "Encrypted messaging game — shared pixel rooms with presence, actions, and Sims-like interaction",
+  "description": "Roomie — cozy encrypted chat with friends and family in shared pixel rooms",
   "workspaces": [
     "packages/*",
     "apps/*"

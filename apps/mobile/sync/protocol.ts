@@ -47,6 +47,8 @@ export type ClientToServer =
   | { type: "hello"; userKey: DemoUserKey }
   | { type: "join_room"; roomId: string; memberKeys?: DemoUserKey[] }
   | { type: "leave_room"; roomId: string }
+  /** Ask server to clear ghost actives across all rooms. */
+  | { type: "refresh_rooms" }
   | { type: "chat"; roomId: string; envelope: ChatEnvelope }
   | {
       type: "action";
@@ -57,6 +59,13 @@ export type ClientToServer =
   | { type: "presence"; roomId: string; presence: PresenceState }
   | { type: "set_room_style"; roomId: string; styleId: string }
   | { type: "set_room_layout"; roomId: string; document: RoomDocument }
+  /** Propose a full layout import — needs every room member to approve. */
+  | { type: "propose_layout_import"; roomId: string; document: RoomDocument }
+  | { type: "layout_import_vote"; roomId: string; approve: boolean }
+  | { type: "cancel_layout_import"; roomId: string }
+  | { type: "propose_layout_reset"; roomId: string }
+  | { type: "layout_reset_vote"; roomId: string; approve: boolean }
+  | { type: "cancel_layout_reset"; roomId: string }
   | {
       type: "set_position";
       roomId: string;
@@ -98,6 +107,36 @@ export type ServerToClient =
       document: RoomDocument;
       rev: number;
       fromUserKey: DemoUserKey;
+    }
+  | {
+      type: "layout_import_pending";
+      roomId: string;
+      fromUserKey: DemoUserKey;
+      document: RoomDocument;
+      approvals: DemoUserKey[];
+      required: DemoUserKey[];
+    }
+  | {
+      type: "layout_import_resolved";
+      roomId: string;
+      status: "applied" | "declined" | "cancelled";
+      fromUserKey: DemoUserKey;
+      byUserKey?: DemoUserKey;
+      document?: RoomDocument;
+    }
+  | {
+      type: "layout_reset_pending";
+      roomId: string;
+      fromUserKey: DemoUserKey;
+      approvals: DemoUserKey[];
+      required: DemoUserKey[];
+    }
+  | {
+      type: "layout_reset_resolved";
+      roomId: string;
+      status: "applied" | "declined" | "cancelled";
+      fromUserKey: DemoUserKey;
+      byUserKey?: DemoUserKey;
     }
   | {
       type: "peer_typing";

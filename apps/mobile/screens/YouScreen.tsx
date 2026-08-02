@@ -22,6 +22,7 @@ type Props = {
   onChangeName: (name: string) => void;
   onChangeAppearance: (patch: Partial<Appearance>) => void;
   onOpenDevTools?: () => void;
+  onSignOut?: () => void;
 };
 
 export function YouScreen({
@@ -30,6 +31,7 @@ export function YouScreen({
   onChangeName,
   onChangeAppearance,
   onOpenDevTools,
+  onSignOut,
 }: Props) {
   const a = user.character.appearance;
   const kit = a.kit === "sheet" ? "sheet" : "cozy";
@@ -155,6 +157,22 @@ export function YouScreen({
             </View>
           </>
         )}
+
+        {onSignOut ? (
+          <View style={styles.signOutBlock}>
+            <Pressable
+              style={styles.signOutBtn}
+              onPress={onSignOut}
+              accessibilityRole="button"
+              accessibilityLabel="Sign out"
+            >
+              <Text style={styles.signOutBtnText}>Sign out</Text>
+            </Pressable>
+            <Text style={styles.signOutHint}>
+              Clears this device session and returns to phone sign-in.
+            </Text>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -250,5 +268,30 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: "#000000",
+  },
+  signOutBlock: {
+    marginTop: space.xl,
+    gap: space.sm,
+    paddingTop: space.lg,
+    borderTopWidth: 2,
+    borderTopColor: colors.border,
+  },
+  signOutBtn: {
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+    borderRadius: radii.lg,
+    paddingVertical: space.md,
+    alignItems: "center",
+  },
+  signOutBtnText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.danger,
+  },
+  signOutHint: {
+    ...typography.caption,
+    color: colors.inkMuted,
+    textAlign: "center",
   },
 });

@@ -1,13 +1,26 @@
+import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { AtlasSprite } from "../AtlasSprite";
+import { OverlayArt } from "../OverlayArt";
 import { PixelImage } from "../PixelImage";
 import {
   drawnSize,
+  FLOOR_DEPTH_CELLS,
+  GRID_CELL,
   type PlacedFurniture,
   SPRITE_BY_ID,
 } from "../../data/roomLayout";
 import type { FurnitureCareIndicator } from "../../data/furnitureCare";
+import {
+  cropOverride,
+  overrideOverlayPlacement,
+  resolveVisualState,
+} from "../../data/spriteOverrides";
+import { DEFAULT_TV_OVERLAY } from "../../data/furnitureVisual";
+import { resolveOverlayArt } from "../../data/overlayFrames";
 import { colors } from "../../theme";
 
+/** @deprecated Prefer FLOOR_DEPTH_CELLS * cellPx — kept for callers expecting a ratio. */
 export const FLOOR_RATIO = 0.48;
 
 type Props = {
@@ -39,12 +52,36 @@ export function FurniturePiece({
   careIndicator = null,
 }: Props) {
   const meta = SPRITE_BY_ID[item.sprite];
+  const isPacked = item.packed === true;
+
+  const visualState = useMemo(
+    () =>
+      !meta || isPacked || careIndicator === "static"
+        ? undefined
+        : resolveVisualState(item.sprite, item.visualStateId),
+    [meta, isPacked, careIndicator, item.sprite, item.visualStateId],
+  );
+
+  const frames = visualState?.kind === "sequence" ? visualState.frames ?? [] : [];
+  const frameMs = visualState?.frameMs ?? 180;
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    setFrameIndex(0);
+  }, [visualState?.id, frames.length]);
+
+  useEffect(() => {
+    if (frames.length < 2) return;
+    const id = setInterval(() => {
+      setFrameIndex((i) => (i + 1) % frames.length);
+    }, frameMs);
+    return () => clearInterval(id);
+  }, [frames.length, frameMs, visualState?.id]);
+
   if (!meta) return null;
 
-  const isPacked = item.packed === true;
   const { w: drawnW, h: drawnH } = drawnSize(item.sprite, cellPx);
-  const floorH = stageHeight * FLOOR_RATIO;
-  // Match character front depth so furniture lives in the visible floor band.
+  const floorH = Math.min(FLOOR_DEPTH_CELLS * cellPx, stageHeight);
   const floorBaseline = Math.max(4, floorH * 0.14);
   const seamY = floorH;
 
@@ -62,6 +99,16 @@ export function FurniturePiece({
     bottom -= dragOffset.y;
   }
 
+  const overlayPlacement =
+    overrideOverlayPlacement(item.sprite) ??
+    (item.sprite === "tv" ? DEFAULT_TV_OVERLAY : null);
+
+  const scale = cellPx / GRID_CELL;
+  const overlayFrame = frames[frameIndex] ?? frames[0];
+  const overlayArt = overlayFrame ? resolveOverlayArt(overlayFrame) : null;
+
+  const atlasCrop = !isPacked ? cropOverride(item.sprite) : null;
+
   const content = isPacked ? (
     <View style={styles.box}>
       <View style={styles.boxTop} />
@@ -72,7 +119,46 @@ export function FurniturePiece({
     </View>
   ) : (
     <View style={styles.spriteWrap}>
-      <PixelImage source={meta.source} width={drawnW} height={drawnH} />
+      {atlasCrop ? (
+        <AtlasSprite crop={atlasCrop} width={drawnW} height={drawnH} />
+      ) : (
+        <PixelImage source={meta.source} width={drawnW} height={drawnH} />
+      )}
+      {overlayPlacement && visualState?.kind === "base" ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.screenOverlay,
+            styles.screenOff,
+            {
+              left: overlayPlacement.offsetX * scale,
+              top: overlayPlacement.offsetY * scale,
+              width: overlayPlacement.width * scale,
+              height: overlayPlacement.height * scale,
+            },
+          ]}
+        />
+      ) : null}
+      {overlayArt && overlayPlacement && visualState?.kind === "sequence" ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.screenOverlay,
+            {
+              left: overlayPlacement.offsetX * scale,
+              top: overlayPlacement.offsetY * scale,
+              width: overlayPlacement.width * scale,
+              height: overlayPlacement.height * scale,
+            },
+          ]}
+        >
+          <OverlayArt
+            art={overlayArt}
+            width={overlayPlacement.width * scale}
+            height={overlayPlacement.height * scale}
+          />
+        </View>
+      ) : null}
       {careIndicator === "dying" ? (
         <View style={[styles.careOverlay, styles.dyingOverlay]} pointerEvents="none">
           <Text style={styles.careBadge}>💧</Text>
@@ -125,6 +211,14 @@ const styles = StyleSheet.create({
     flex: 1,
     width: "100%",
     height: "100%",
+    position: "relative",
+  },
+  screenOverlay: {
+    position: "absolute",
+    overflow: "hidden",
+  },
+  screenOff: {
+    backgroundColor: "#0a0a12",
   },
   selected: {
     borderWidth: 2,

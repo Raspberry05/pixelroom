@@ -1,4 +1,6 @@
 import type { FurnitureSprite } from "./roomLayout";
+// Runtime override lookup (type-safe; avoid cycles by only importing the fn).
+import { furnitureOverride } from "./spriteOverrides";
 
 export type MiniGameType = "cooking" | "frying" | "cleaning" | "unpack" | "tv" | "bedmaking" | "watering";
 
@@ -39,17 +41,38 @@ export const FURNITURE_ACTIONS: FurnitureAction[] = [
   },
 ];
 
+const MINI_GAME_LABEL: Record<MiniGameType, string> = {
+  cooking: "Cook",
+  frying: "Fry",
+  cleaning: "Clean",
+  unpack: "Unpack",
+  tv: "Watch TV",
+  bedmaking: "Make Bed",
+  watering: "Water Plant",
+};
+
 /**
  * Check if a furniture sprite has an interactive action
  */
 export function hasAction(sprite: FurnitureSprite): boolean {
+  const ov = furnitureOverride(sprite);
+  if (ov?.miniGame) return true;
   return FURNITURE_ACTIONS.some((a) => a.furnitureSprite === sprite);
 }
 
 /**
- * Get the action for a furniture sprite
+ * Get the action for a furniture sprite (DevTools miniGame overrides defaults).
  */
 export function getAction(sprite: FurnitureSprite): FurnitureAction | null {
+  const ov = furnitureOverride(sprite);
+  if (ov?.miniGame) {
+    return {
+      furnitureSprite: sprite,
+      actionName: MINI_GAME_LABEL[ov.miniGame],
+      miniGameType: ov.miniGame,
+      description: `DevTools · ${ov.miniGame}`,
+    };
+  }
   return FURNITURE_ACTIONS.find((a) => a.furnitureSprite === sprite) ?? null;
 }
 

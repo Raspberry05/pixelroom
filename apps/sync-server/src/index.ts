@@ -4,16 +4,21 @@ import {
   asCharacterId,
   asRoomId,
   createSeedCompatibleRoom,
+  DEFAULT_HOTSPOTS,
+  hotspotsWithFurnitureSeats,
   performAction,
+  resolveWalkPosition,
   ROOM_SPAN_X,
   setPresence,
   setRoomStyle,
+  solidBoxesFromFurniture,
   tickRoom,
   isRoomStyleId,
   withMemberState,
   type ActionKind,
   type Character,
   type CharacterId,
+  type LayoutFurnitureRef,
   type PresenceState,
   type Room,
 } from "./domain.js";
@@ -54,6 +59,8 @@ type ClientMsg =
   | { type: "hello"; userKey: DemoUserKey }
   | { type: "join_room"; roomId: string; memberKeys?: DemoUserKey[] }
   | { type: "leave_room"; roomId: string }
+  /** Force every room's presence to match live sockets (clear ghost actives). */
+  | { type: "refresh_rooms" }
   | { type: "chat"; roomId: string; envelope: ChatEnvelope }
   | {
       type: "action";
@@ -64,6 +71,12 @@ type ClientMsg =
   | { type: "presence"; roomId: string; presence: PresenceState }
   | { type: "set_room_style"; roomId: string; styleId: string }
   | { type: "set_room_layout"; roomId: string; document: unknown }
+  | { type: "propose_layout_import"; roomId: string; document: unknown }
+  | { type: "layout_import_vote"; roomId: string; approve: boolean }
+  | { type: "cancel_layout_import"; roomId: string }
+  | { type: "propose_layout_reset"; roomId: string }
+  | { type: "layout_reset_vote"; roomId: string; approve: boolean }
+  | { type: "cancel_layout_reset"; roomId: string }
   | { type: "set_position"; roomId: string; x: number; y?: number }
   | { type: "typing"; roomId: string; isTyping: boolean }
   | { type: "call_invite"; roomId: string; targetKey?: DemoUserKey }
@@ -307,6 +320,42 @@ const layouts = new Map<string, RoomLayoutState>();
 /** Skip auto-wander briefly after a player scrolls their character. */
 const manualMoveAt = new Map<string, number>();
 
+type PendingLayoutImport = {
+  document: unknown;
+  fromUserKey: DemoUserKey;
+  approvals: Set<DemoUserKey>;
+  required: DemoUserKey[];
+};
+/** Full JSON layout imports require every room member to approve. */
+const pendingLayoutImports = new Map<string, PendingLayoutImport>();
+
+type PendingLayoutReset = {
+  fromUserKey: DemoUserKey;
+  approvals: Set<DemoUserKey>;
+  required: DemoUserKey[];
+};
+const pendingLayoutResets = new Map<string, PendingLayoutReset>();
+
+const EMPTY_ROOM_LAYOUT = {
+  version: 4,
+  furniture: [],
+  windows: [
+    {
+      id: "window_main",
+      gx: 3,
+      gy: 3,
+      w: 6,
+      h: 4,
+    },
+  ],
+  expansionsLeft: 0,
+  expansionsRight: 0,
+  floorFill: true,
+  floorTiles: {},
+  wallTiles: {},
+  expansionPurchases: [],
+};
+
 const sockets = new Map<WebSocket, SocketState>();
 /** Live call sessions keyed by room id — enables late join without re-ringing. */
 const activeCalls = new Map<string, ActiveCallSession>();
@@ -390,6 +439,56 @@ function worldSpanForRoom(roomId: string): number {
   return ROOM_SPAN_X * chunks;
 }
 
+function furnitureFromLayoutDoc(document: unknown): LayoutFurnitureRef[] {
+  const doc = document as { furniture?: LayoutFurnitureRef[] } | null;
+  if (!doc || !Array.isArray(doc.furniture)) return [];
+  return doc.furniture.filter(
+    (f) => f && typeof f.id === "string" && typeof f.sprite === "string",
+  );
+}
+
+/** Match mobile FLOOR_DEPTH_CELLS for gy → logical depth mapping. */
+const LAYOUT_FLOOR_DEPTH_CELLS = 7;
+
+function solidBoxesFromLayout(roomId: string) {
+  const furniture = furnitureFromLayoutDoc(layouts.get(roomId)?.document);
+  return solidBoxesFromFurniture(furniture, LAYOUT_FLOOR_DEPTH_CELLS);
+}
+
+function notifyLayoutImportResolved(
+  roomId: string,
+  payload: {
+    type: "layout_import_resolved";
+    roomId: string;
+    status: "applied" | "declined" | "cancelled";
+    fromUserKey: DemoUserKey;
+    byUserKey?: DemoUserKey;
+    document?: unknown;
+  },
+  memberKeys: DemoUserKey[],
+) {
+  broadcastToRoom(roomId, payload);
+  for (const key of memberKeys) {
+    sendToUser(key, payload);
+  }
+}
+
+/** Rebuild sit hotspots from placed chairs whenever layout changes. */
+function applyFurnitureSeatsToRoom(roomId: string, document: unknown) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  const furniture = furnitureFromLayoutDoc(document);
+  const nextHotspots = hotspotsWithFurnitureSeats(
+    DEFAULT_HOTSPOTS.map((h) => ({ ...h, position: { ...h.position } })),
+    furniture,
+  );
+  setRoomState(roomId, {
+    ...room,
+    hotspots: nextHotspots,
+    updatedAt: Date.now(),
+  });
+}
+
 function send(ws: WebSocket, payload: unknown) {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(payload));
@@ -400,8 +499,75 @@ function layoutPayload(roomId: string): RoomLayoutState | null {
   return layouts.get(roomId) ?? null;
 }
 
+/** User keys that currently have this room selected on an open socket. */
+function connectedKeysForRoom(roomId: string): Set<DemoUserKey> {
+  const keys = new Set<DemoUserKey>();
+  for (const [, st] of sockets) {
+    if (st.roomId === roomId && st.userKey) keys.add(st.userKey);
+  }
+  return keys;
+}
+
+/**
+ * Presence follows live sockets: active only while joined to this room.
+ * Clears ghost "online" members who left/hallway without a clean leave.
+ */
+function reconcileRoomPresence(roomId: string): Room {
+  let room = ensureRoom(roomId);
+  const connected = connectedKeysForRoom(roomId);
+  for (const userKey of userKeysForRoom(room)) {
+    const characterId = characterByUser[userKey];
+    const member = room.memberState[String(characterId)];
+    if (!member) continue;
+    const wantActive = connected.has(userKey);
+    if (wantActive && member.presence !== "active") {
+      room = setPresence(room, characterId, "active");
+    } else if (!wantActive && member.presence === "active") {
+      room = setPresence(room, characterId, "sleeping");
+    }
+  }
+  setRoomState(roomId, room);
+  return room;
+}
+
+/** Reconcile every room; push clean snapshots to any room that has viewers. */
+function refreshAllRoomsPresence() {
+  for (const roomId of [...rooms.keys()]) {
+    reconcileRoomPresence(roomId);
+    const hasAudience = [...sockets.values()].some((s) => s.roomId === roomId);
+    if (hasAudience) {
+      broadcastRoom(roomId);
+    }
+  }
+}
+
+/**
+ * Put this user to sleep in every room where none of their sockets are joined.
+ * Fixes multi-room ghost "active" after tab switches / missed leave.
+ */
+function sleepUserInOtherRooms(userKey: DemoUserKey, exceptRoomId: string | null) {
+  for (const roomId of [...rooms.keys()]) {
+    if (exceptRoomId && roomId === exceptRoomId) continue;
+    const stillJoined = [...sockets.values()].some(
+      (s) => s.userKey === userKey && s.roomId === roomId,
+    );
+    if (stillJoined) continue;
+    let room = rooms.get(roomId);
+    if (!room) continue;
+    const characterId = characterByUser[userKey];
+    if (!room.memberIds.some((id) => id === characterId)) continue;
+    const member = room.memberState[String(characterId)];
+    if (!member || member.presence !== "active") continue;
+    room = setPresence(room, characterId, "sleeping");
+    setRoomState(roomId, room);
+    if ([...sockets.values()].some((s) => s.roomId === roomId)) {
+      broadcastRoom(roomId);
+    }
+  }
+}
+
 function broadcastRoom(roomId: string) {
-  const room = ensureRoom(roomId);
+  const room = reconcileRoomPresence(roomId);
   const layout = layoutPayload(roomId);
   const payload = {
     type: "room_state",
@@ -431,6 +597,103 @@ function broadcastLayout(roomId: string, fromUserKey: DemoUserKey) {
       send(ws, payload);
     }
   }
+}
+
+function broadcastToRoom(roomId: string, payload: unknown) {
+  for (const [ws, state] of sockets) {
+    if (state.roomId === roomId) {
+      send(ws, payload);
+    }
+  }
+}
+
+function broadcastLayoutImportPending(roomId: string) {
+  const pending = pendingLayoutImports.get(roomId);
+  if (!pending) return;
+  const payload = {
+    type: "layout_import_pending",
+    roomId,
+    fromUserKey: pending.fromUserKey,
+    document: pending.document,
+    approvals: [...pending.approvals],
+    required: pending.required,
+  };
+  // In-room members get the live banner; everyone else gets a notify (hallway / other room).
+  broadcastToRoom(roomId, payload);
+  for (const key of pending.required) {
+    let inRoom = false;
+    for (const [, st] of sockets) {
+      if (st.userKey === key && st.roomId === roomId) {
+        inRoom = true;
+        break;
+      }
+    }
+    if (!inRoom) {
+      sendToUser(key, payload);
+    }
+  }
+}
+
+function commitLayoutImport(roomId: string, fromUserKey: DemoUserKey) {
+  const pending = pendingLayoutImports.get(roomId);
+  if (!pending) return;
+  const prev = layouts.get(roomId);
+  const next: RoomLayoutState = {
+    document: pending.document,
+    rev: (prev?.rev ?? 0) + 1,
+  };
+  layouts.set(roomId, next);
+  applyFurnitureSeatsToRoom(roomId, pending.document);
+  pendingLayoutImports.delete(roomId);
+  const resolved = {
+    type: "layout_import_resolved" as const,
+    roomId,
+    status: "applied" as const,
+    fromUserKey,
+    document: pending.document,
+  };
+  notifyLayoutImportResolved(
+    roomId,
+    resolved,
+    userKeysForRoom(ensureRoom(roomId)),
+  );
+  broadcastLayout(roomId, fromUserKey);
+  broadcastRoom(roomId);
+}
+
+function broadcastLayoutResetPending(roomId: string) {
+  const pending = pendingLayoutResets.get(roomId);
+  if (!pending) return;
+  broadcastToRoom(roomId, {
+    type: "layout_reset_pending",
+    roomId,
+    fromUserKey: pending.fromUserKey,
+    approvals: [...pending.approvals],
+    required: pending.required,
+  });
+}
+
+function commitLayoutReset(roomId: string, fromUserKey: DemoUserKey) {
+  if (!pendingLayoutResets.has(roomId)) return;
+  const prev = layouts.get(roomId);
+  const next: RoomLayoutState = {
+    document: {
+      ...EMPTY_ROOM_LAYOUT,
+      windows: EMPTY_ROOM_LAYOUT.windows.map((w) => ({ ...w })),
+    },
+    rev: (prev?.rev ?? 0) + 1,
+  };
+  layouts.set(roomId, next);
+  applyFurnitureSeatsToRoom(roomId, next.document);
+  pendingLayoutResets.delete(roomId);
+  broadcastToRoom(roomId, {
+    type: "layout_reset_resolved",
+    roomId,
+    status: "applied",
+    fromUserKey,
+  });
+  broadcastLayout(roomId, fromUserKey);
+  broadcastRoom(roomId);
 }
 
 function userKeysForRoom(room: Room): DemoUserKey[] {
@@ -495,6 +758,8 @@ function handleMessage(ws: WebSocket, raw: string) {
   if (msg.type === "hello") {
     state.userKey = resolveUserKey(msg.userKey);
     send(ws, { type: "hello_ok", userKey: state.userKey });
+    // Clear any ghost "active" for this user outside rooms they still occupy.
+    sleepUserInOtherRooms(state.userKey, state.roomId);
     return;
   }
 
@@ -506,6 +771,11 @@ function handleMessage(ws: WebSocket, raw: string) {
   const userKey = state.userKey;
   const characterId = characterByUser[userKey];
 
+  if (msg.type === "refresh_rooms") {
+    refreshAllRoomsPresence();
+    return;
+  }
+
   if (msg.type === "join_room") {
     try {
       const claimed = Array.isArray(msg.memberKeys)
@@ -513,10 +783,30 @@ function handleMessage(ws: WebSocket, raw: string) {
         : undefined;
       const room = ensureRoom(msg.roomId, claimed);
       assertRoomMember(room, userKey);
+      // Leaving a previous room must clear presence there (openRoom can switch).
+      const previousRoomId = state.roomId;
+      if (previousRoomId && previousRoomId !== msg.roomId) {
+        state.roomId = null;
+        // Always reconcile+broadcast previous room — never skip on assert errors.
+        if (rooms.has(previousRoomId)) {
+          broadcastRoom(previousRoomId);
+        }
+      }
       state.roomId = msg.roomId;
-      const next = setPresence(room, characterId, "active");
-      setRoomState(msg.roomId, next);
+      // Drop ghost actives for this user in every other room.
+      sleepUserInOtherRooms(userKey, msg.roomId);
+      const existingLayout = layouts.get(msg.roomId);
+      if (existingLayout) {
+        applyFurnitureSeatsToRoom(msg.roomId, existingLayout.document);
+      }
+      // broadcastRoom reconciles active = connected sockets for this room.
       broadcastRoom(msg.roomId);
+      if (pendingLayoutImports.has(msg.roomId)) {
+        broadcastLayoutImportPending(msg.roomId);
+      }
+      if (pendingLayoutResets.has(msg.roomId)) {
+        broadcastLayoutResetPending(msg.roomId);
+      }
     } catch (err) {
       state.roomId = null;
       send(ws, {
@@ -531,24 +821,36 @@ function handleMessage(ws: WebSocket, raw: string) {
     if (state.roomId === msg.roomId) {
       state.roomId = null;
     }
-    try {
-      const room = rooms.get(msg.roomId);
-      if (!room) return;
-      assertRoomMember(room, userKey);
-      const next = setPresence(room, characterId, "sleeping");
-      setRoomState(msg.roomId, next);
+    // Force-sleep this user in the room they left unless another of their
+    // tabs is still joined there (fixes Alice staying "active" on Bob's screen).
+    if (rooms.has(msg.roomId)) {
+      const stillJoined = [...sockets.values()].some(
+        (s) => s.userKey === userKey && s.roomId === msg.roomId,
+      );
+      if (!stillJoined) {
+        let room = rooms.get(msg.roomId)!;
+        const member = room.memberState[String(characterId)];
+        if (member && member.presence === "active") {
+          room = setPresence(room, characterId, "sleeping");
+          setRoomState(msg.roomId, room);
+        }
+      }
       broadcastRoom(msg.roomId);
-    } catch (err) {
-      send(ws, {
-        type: "error",
-        message: err instanceof Error ? err.message : "failed to leave room",
-      });
     }
+    sleepUserInOtherRooms(userKey, state.roomId);
     return;
   }
 
   if (msg.type === "presence") {
     try {
+      // Presence only applies while this socket is actually in the room.
+      if (state.roomId !== msg.roomId) {
+        send(ws, {
+          type: "error",
+          message: "join the room before updating presence",
+        });
+        return;
+      }
       const room = requireMembership(msg.roomId, userKey);
       const next = setPresence(room, characterId, msg.presence);
       setRoomState(msg.roomId, next);
@@ -611,6 +913,7 @@ function handleMessage(ws: WebSocket, raw: string) {
         targetName: msg.targetName ?? null,
         charactersById: charactersById(),
         source: "command",
+        solidBoxes: solidBoxesFromLayout(msg.roomId),
       });
       setRoomState(msg.roomId, result.room);
       const target = result.logEntry.targetId
@@ -673,13 +976,236 @@ function handleMessage(ws: WebSocket, raw: string) {
       });
       return;
     }
+    if (pendingLayoutImports.has(msg.roomId) || pendingLayoutResets.has(msg.roomId)) {
+      send(ws, {
+        type: "error",
+        message: "layout change waiting for room approval — finish or cancel it first",
+      });
+      return;
+    }
     const prev = layouts.get(msg.roomId);
     const next: RoomLayoutState = {
       document: msg.document,
       rev: (prev?.rev ?? 0) + 1,
     };
     layouts.set(msg.roomId, next);
+    applyFurnitureSeatsToRoom(msg.roomId, msg.document);
     broadcastLayout(msg.roomId, userKey);
+    broadcastRoom(msg.roomId);
+    return;
+  }
+
+  if (msg.type === "propose_layout_import") {
+    if (!msg.document || typeof msg.document !== "object") {
+      send(ws, { type: "error", message: "invalid layout import" });
+      return;
+    }
+    try {
+      const room = requireMembership(msg.roomId, userKey);
+      const required = userKeysForRoom(room);
+      if (required.length < 2) {
+        send(ws, {
+          type: "error",
+          message: "layout import needs at least two room members",
+        });
+        return;
+      }
+      if (pendingLayoutImports.has(msg.roomId) || pendingLayoutResets.has(msg.roomId)) {
+        send(ws, {
+          type: "error",
+          message: "a layout change is already waiting for approval",
+        });
+        return;
+      }
+      pendingLayoutImports.set(msg.roomId, {
+        document: msg.document,
+        fromUserKey: userKey,
+        approvals: new Set([userKey]),
+        required,
+      });
+      broadcastLayoutImportPending(msg.roomId);
+    } catch (err) {
+      send(ws, {
+        type: "error",
+        message: err instanceof Error ? err.message : "not allowed",
+      });
+    }
+    return;
+  }
+
+  if (msg.type === "layout_import_vote") {
+    try {
+      requireMembership(msg.roomId, userKey);
+      const pending = pendingLayoutImports.get(msg.roomId);
+      if (!pending) {
+        send(ws, { type: "error", message: "no layout import pending" });
+        return;
+      }
+      if (!pending.required.includes(userKey)) {
+        send(ws, { type: "error", message: "not a room member" });
+        return;
+      }
+      if (!msg.approve) {
+        pendingLayoutImports.delete(msg.roomId);
+        notifyLayoutImportResolved(
+          msg.roomId,
+          {
+            type: "layout_import_resolved",
+            roomId: msg.roomId,
+            status: "declined",
+            fromUserKey: pending.fromUserKey,
+            byUserKey: userKey,
+          },
+          pending.required,
+        );
+        return;
+      }
+      pending.approvals.add(userKey);
+      const allIn = pending.required.every((k) => pending.approvals.has(k));
+      if (allIn) {
+        commitLayoutImport(msg.roomId, pending.fromUserKey);
+      } else {
+        broadcastLayoutImportPending(msg.roomId);
+      }
+    } catch (err) {
+      send(ws, {
+        type: "error",
+        message: err instanceof Error ? err.message : "not allowed",
+      });
+    }
+    return;
+  }
+
+  if (msg.type === "cancel_layout_import") {
+    try {
+      requireMembership(msg.roomId, userKey);
+      const pending = pendingLayoutImports.get(msg.roomId);
+      if (!pending) return;
+      if (pending.fromUserKey !== userKey) {
+        send(ws, {
+          type: "error",
+          message: "only the proposer can cancel the import",
+        });
+        return;
+      }
+      pendingLayoutImports.delete(msg.roomId);
+      notifyLayoutImportResolved(
+        msg.roomId,
+        {
+          type: "layout_import_resolved",
+          roomId: msg.roomId,
+          status: "cancelled",
+          fromUserKey: userKey,
+          byUserKey: userKey,
+        },
+        pending.required,
+      );
+    } catch (err) {
+      send(ws, {
+        type: "error",
+        message: err instanceof Error ? err.message : "not allowed",
+      });
+    }
+    return;
+  }
+
+  if (msg.type === "propose_layout_reset") {
+    try {
+      const room = requireMembership(msg.roomId, userKey);
+      const required = userKeysForRoom(room);
+      if (required.length < 2) {
+        send(ws, {
+          type: "error",
+          message: "layout reset needs at least two room members",
+        });
+        return;
+      }
+      if (pendingLayoutImports.has(msg.roomId) || pendingLayoutResets.has(msg.roomId)) {
+        send(ws, {
+          type: "error",
+          message: "a layout change is already waiting for approval",
+        });
+        return;
+      }
+      pendingLayoutResets.set(msg.roomId, {
+        fromUserKey: userKey,
+        approvals: new Set([userKey]),
+        required,
+      });
+      broadcastLayoutResetPending(msg.roomId);
+    } catch (err) {
+      send(ws, {
+        type: "error",
+        message: err instanceof Error ? err.message : "not allowed",
+      });
+    }
+    return;
+  }
+
+  if (msg.type === "layout_reset_vote") {
+    try {
+      requireMembership(msg.roomId, userKey);
+      const pending = pendingLayoutResets.get(msg.roomId);
+      if (!pending) {
+        send(ws, { type: "error", message: "no layout reset pending" });
+        return;
+      }
+      if (!pending.required.includes(userKey)) {
+        send(ws, { type: "error", message: "not a room member" });
+        return;
+      }
+      if (!msg.approve) {
+        pendingLayoutResets.delete(msg.roomId);
+        broadcastToRoom(msg.roomId, {
+          type: "layout_reset_resolved",
+          roomId: msg.roomId,
+          status: "declined",
+          fromUserKey: pending.fromUserKey,
+          byUserKey: userKey,
+        });
+        return;
+      }
+      pending.approvals.add(userKey);
+      if (pending.required.every((k) => pending.approvals.has(k))) {
+        commitLayoutReset(msg.roomId, pending.fromUserKey);
+      } else {
+        broadcastLayoutResetPending(msg.roomId);
+      }
+    } catch (err) {
+      send(ws, {
+        type: "error",
+        message: err instanceof Error ? err.message : "not allowed",
+      });
+    }
+    return;
+  }
+
+  if (msg.type === "cancel_layout_reset") {
+    try {
+      requireMembership(msg.roomId, userKey);
+      const pending = pendingLayoutResets.get(msg.roomId);
+      if (!pending) return;
+      if (pending.fromUserKey !== userKey) {
+        send(ws, {
+          type: "error",
+          message: "only the proposer can cancel the reset",
+        });
+        return;
+      }
+      pendingLayoutResets.delete(msg.roomId);
+      broadcastToRoom(msg.roomId, {
+        type: "layout_reset_resolved",
+        roomId: msg.roomId,
+        status: "cancelled",
+        fromUserKey: userKey,
+        byUserKey: userKey,
+      });
+    } catch (err) {
+      send(ws, {
+        type: "error",
+        message: err instanceof Error ? err.message : "not allowed",
+      });
+    }
     return;
   }
 
@@ -689,14 +1215,19 @@ function handleMessage(ws: WebSocket, raw: string) {
       let room = requireMembership(msg.roomId, userKey);
       const current = room.memberState[String(characterId)];
       if (!current || current.presence !== "active") return;
-      const x = Math.max(0, Math.min(maxX, Number(msg.x) || 0));
-      const y = Math.max(
+      const rawX = Math.max(0, Math.min(maxX, Number(msg.x) || 0));
+      const rawY = Math.max(
         0,
         Math.min(4, msg.y == null ? current.position.y : Number(msg.y) || 0),
       );
+      const walked = resolveWalkPosition(
+        { x: rawX, y: rawY },
+        solidBoxesFromLayout(msg.roomId),
+        maxX,
+      );
       const facing =
-        Math.abs(x - current.position.x) > 0.05
-          ? x < current.position.x
+        Math.abs(walked.x - current.position.x) > 0.05
+          ? walked.x < current.position.x
             ? "left"
             : "right"
           : current.facing;
@@ -704,7 +1235,7 @@ function handleMessage(ws: WebSocket, raw: string) {
         room,
         characterId,
         {
-          position: { x, y },
+          position: walked,
           facing,
           currentAction: "walk",
           occupiedSpotId: null,
@@ -952,34 +1483,46 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     const state = sockets.get(ws);
-    if (state?.userKey && state.roomId) {
-      const room = setPresence(
-        ensureRoom(state.roomId),
-        characterByUser[state.userKey],
-        "sleeping",
-      );
-      setRoomState(state.roomId, room);
-      broadcastRoom(state.roomId);
-    }
+    const roomId = state?.roomId ?? null;
+    // Remove socket before reconcile so presence is not counted as joined.
     sockets.delete(ws);
+    if (roomId) {
+      broadcastRoom(roomId);
+    }
   });
 });
 
 setInterval(() => {
   const now = Date.now();
-  for (const [roomId, room] of rooms) {
-    const active = Object.values(room.memberState).some((m) => m.presence === "active");
-    if (!active) continue;
-    const skipWanderIds = Object.values(room.memberState)
+  for (const [roomId] of rooms) {
+    // Drop ghost actives before deciding whether to tick; always notify if
+    // reconcile changed anyone so peers don't keep a stale "active" snapshot.
+    const before = rooms.get(roomId);
+    const live = reconcileRoomPresence(roomId);
+    const presenceChanged =
+      before != null &&
+      userKeysForRoom(live).some((k) => {
+        const id = String(characterByUser[k]);
+        return before.memberState[id]?.presence !== live.memberState[id]?.presence;
+      });
+    const active = Object.values(live.memberState).some((m) => m.presence === "active");
+    if (!active) {
+      if (presenceChanged) broadcastRoom(roomId);
+      continue;
+    }
+    const skipWanderIds = Object.values(live.memberState)
       .filter((m) => now - (manualMoveAt.get(String(m.characterId)) ?? 0) < 1200)
       .map((m) => m.characterId);
-    const result = tickRoom(room, {
+    const solidBoxes = solidBoxesFromLayout(roomId);
+    const result = tickRoom(live, {
       now,
       config: {
-        autoInteractChance: 0.45,
+        // Lower chance + core hold/command locks keep actions coherent.
+        autoInteractChance: 0.22,
         maxAutoInteractions: 1,
         skipWanderIds,
         floorMaxX: worldSpanForRoom(roomId),
+        solidBoxes,
       },
     });
     setRoomState(roomId, result.room);
@@ -1002,5 +1545,5 @@ setInterval(() => {
   }
 }, TICK_MS);
 
-console.log(`Pixelroom sync server on ws://localhost:${PORT}`);
+console.log(`Roomie sync server on ws://localhost:${PORT}`);
 console.log(`Open browsers: ?user=alice | ?user=bob | ?user=carol | ?user=dave`);

@@ -270,19 +270,46 @@ function isRecipeMatch(recipe: Recipe, selected: IngredientAmount[]): boolean {
  */
 export function createDish(selectedIngredients: IngredientAmount[]): CookedDish {
   const recipe = matchRecipe(selectedIngredients);
-  
+
   if (recipe) {
     // Known recipe - good or perfect quality based on exact match
     const isExactMatch = recipe.ingredients.every((recipeIng) => {
-      const selected = selectedIngredients.find((s) => s.ingredientId === recipeIng.ingredientId);
+      const selected = selectedIngredients.find(
+        (s) => s.ingredientId === recipeIng.ingredientId,
+      );
       return selected && selected.amount === recipeIng.amount;
     });
-    
+
+    // Prefer DevTools dish catalog overrides (name / emoji).
+    let name = recipe.name;
+    let emoji = recipe.emoji;
+    let description = recipe.description;
+    try {
+      // Lazy require avoids circular imports with catalogExtras ↔ recipes.
+      const { dishForRecipe } = require("./catalogExtras") as {
+        dishForRecipe: (
+          id: string | null,
+        ) => {
+          name: string;
+          emoji: string;
+          description: string;
+        } | null;
+      };
+      const override = dishForRecipe(recipe.id);
+      if (override) {
+        name = override.name || name;
+        emoji = override.emoji || emoji;
+        description = override.description || description;
+      }
+    } catch {
+      // ignore
+    }
+
     return {
       recipeId: recipe.id,
-      name: recipe.name,
-      emoji: recipe.emoji,
-      description: recipe.description,
+      name,
+      emoji,
+      description,
       quality: isExactMatch ? "perfect" : "good",
     };
   }

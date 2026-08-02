@@ -9,7 +9,12 @@ import {
 } from "react-native";
 import { colors, radii, space, typography } from "../../theme";
 
-import type { IngredientAmount, CookedDish } from "../../data/recipes";
+import { createDish, type IngredientAmount, type CookedDish } from "../../data/recipes";
+
+/** Bar fill: ~0.6s (was ~2.5s). Pure wait after the order puzzle. */
+const COOK_PROGRESS_STEP = 8;
+const COOK_PROGRESS_MS = 40;
+const COOK_FINISH_DELAY_MS = 120;
 
 type Props = {
   visible: boolean;
@@ -52,26 +57,22 @@ export function CookingMiniGame({ visible, selectedIngredients, onComplete, onCa
 
   useEffect(() => {
     if (currentStep >= RECIPE_STEPS.length && visible) {
-      // Start cooking animation
       const timer = setInterval(() => {
         setCookingProgress((prev) => {
           if (prev >= 100) {
             clearInterval(timer);
             setTimeout(() => {
-              // Calculate dish result if ingredients were provided
               if (selectedIngredients && selectedIngredients.length > 0) {
-                const { createDish } = require("../../data/recipes");
-                const dish = createDish(selectedIngredients);
-                onComplete(dish);
+                onComplete(createDish(selectedIngredients));
               } else {
                 onComplete();
               }
-            }, 500);
+            }, COOK_FINISH_DELAY_MS);
             return 100;
           }
-          return prev + 2;
+          return Math.min(100, prev + COOK_PROGRESS_STEP);
         });
-      }, 50);
+      }, COOK_PROGRESS_MS);
       return () => clearInterval(timer);
     }
   }, [currentStep, visible, onComplete, selectedIngredients]);

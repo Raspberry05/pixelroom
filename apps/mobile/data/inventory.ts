@@ -57,10 +57,8 @@ export const INVENTORY_CATALOG: InventoryItemDef[] = [
   { id: "furn_appliance", name: "Appliance", sprite: "appliance", kind: "furniture", collision: "solid", price: 90, starterQty: 1 },
   { id: "furn_stove", name: "Stove", sprite: "appliance", kind: "furniture", collision: "solid", price: 100, starterQty: 0 },
   { id: "furn_tv", name: "TV", sprite: "tv", kind: "furniture", collision: "solid", price: 110, starterQty: 0 },
-  { id: "furn_chair", name: "Chair", sprite: "chairDown", kind: "furniture", collision: "seat", price: 25, starterQty: 4 },
-  { id: "furn_chair_l", name: "Chair ←", sprite: "chairLeft", kind: "furniture", collision: "seat", price: 25, starterQty: 2 },
-  { id: "furn_chair_r", name: "Chair →", sprite: "chairRight", kind: "furniture", collision: "seat", price: 25, starterQty: 2 },
-  { id: "furn_chair_u", name: "Chair ↑", sprite: "chairUp", kind: "furniture", collision: "seat", price: 25, starterQty: 1 },
+  // One chair SKU — facing is chosen at place time (rotations), not separate store items.
+  { id: "furn_chair", name: "Chair", sprite: "chairDown", kind: "furniture", collision: "seat", price: 25, starterQty: 9 },
   { id: "furn_rug", name: "Rug", sprite: "rug", kind: "furniture", collision: "rug", price: 40, starterQty: 2 },
   { id: "furn_plant", name: "Plant", sprite: "plant", kind: "furniture", collision: "surfaceItem", price: 20, starterQty: 3 },
   { id: "furn_candle", name: "Candle", sprite: "candle", kind: "furniture", collision: "surfaceItem", price: 12, starterQty: 2 },
@@ -84,9 +82,9 @@ const SPRITE_TO_FURN_ID: Partial<Record<FurnitureSprite, InventoryItemId>> = {
   appliance: "furn_appliance",
   tv: "furn_tv",
   chairDown: "furn_chair",
-  chairLeft: "furn_chair_l",
-  chairRight: "furn_chair_r",
-  chairUp: "furn_chair_u",
+  chairLeft: "furn_chair",
+  chairRight: "furn_chair",
+  chairUp: "furn_chair",
   rug: "furn_rug",
   plant: "furn_plant",
   candle: "furn_candle",
@@ -111,6 +109,37 @@ export function inventoryIdForTile(surface: "floor" | "wall"): InventoryItemId {
 }
 
 export type InventoryState = Record<InventoryItemId, number>;
+
+/** Chair facing variants — same inventory item, different placeable sprites. */
+export const CHAIR_ROTATIONS: FurnitureSprite[] = [
+  "chairDown",
+  "chairLeft",
+  "chairRight",
+  "chairUp",
+];
+
+export function isChairSprite(sprite: FurnitureSprite): boolean {
+  return CHAIR_ROTATIONS.includes(sprite);
+}
+
+const LEGACY_CHAIR_IDS = ["furn_chair_l", "furn_chair_r", "furn_chair_u"] as const;
+
+/** Fold old directional chair SKUs into `furn_chair`. */
+export function migrateChairInventory(inv: InventoryState): InventoryState {
+  let extras = 0;
+  for (const id of LEGACY_CHAIR_IDS) {
+    extras += inv[id] ?? 0;
+  }
+  if (extras <= 0 && inv.furn_chair != null) return inv;
+  const next = { ...inv };
+  if (extras > 0) {
+    next.furn_chair = (next.furn_chair ?? 0) + extras;
+    for (const id of LEGACY_CHAIR_IDS) {
+      next[id] = 0;
+    }
+  }
+  return next;
+}
 
 export function createStarterInventory(): InventoryState {
   const inv: InventoryState = {};

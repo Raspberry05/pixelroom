@@ -10,6 +10,7 @@ import {
 import { colors, radii, space, typography } from "../../theme";
 import { getGroceryItem, type GroceryItem } from "../../data/groceryItems";
 import type { IngredientAmount } from "../../data/recipes";
+import { RecipeBookModal } from "./RecipeBookModal";
 
 type Props = {
   visible: boolean;
@@ -25,6 +26,7 @@ export function IngredientSelector({
   onCancel,
 }: Props) {
   const [selectedAmounts, setSelectedAmounts] = useState<Record<string, number>>({});
+  const [recipeBookOpen, setRecipeBookOpen] = useState(false);
 
   const availableItems = Object.keys(availableIngredients)
     .map((id) => getGroceryItem(id))
@@ -73,6 +75,7 @@ export function IngredientSelector({
   const canStartCooking = totalSelected > 0;
 
   return (
+    <>
     <Modal
       visible={visible}
       transparent
@@ -86,6 +89,12 @@ export function IngredientSelector({
             <Text style={styles.subtitle}>
               Choose what to cook ({totalSelected} selected)
             </Text>
+            <Pressable
+              style={styles.recipeBookBtn}
+              onPress={() => setRecipeBookOpen(true)}
+            >
+              <Text style={styles.recipeBookBtnText}>📖 Recipe Book</Text>
+            </Pressable>
           </View>
 
           {availableItems.length === 0 ? (
@@ -163,6 +172,12 @@ export function IngredientSelector({
         </View>
       </View>
     </Modal>
+
+    <RecipeBookModal
+      visible={recipeBookOpen}
+      onClose={() => setRecipeBookOpen(false)}
+    />
+    </>
   );
 }
 
@@ -198,6 +213,20 @@ const styles = StyleSheet.create({
     ...typography.body,
     fontSize: 13,
     color: colors.inkMuted,
+  },
+  recipeBookBtn: {
+    marginTop: space.sm,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radii.pill,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingVertical: space.xs,
+    paddingHorizontal: space.md,
+  },
+  recipeBookBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.ink,
   },
   emptyState: {
     padding: space.xl,

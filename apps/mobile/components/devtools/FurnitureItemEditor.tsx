@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -10,19 +10,54 @@ import {
 import { colors, radii, space, typography } from "../../theme";
 import {
   createFurnitureTemplate,
+  deleteFurnitureItem,
+  syncAtlasEntryFromFurniture,
+  type DevToolsState,
   type FurnitureItemDefinition,
-  type SpriteAtlasEntry,
-  type SittingPosition,
-  type InteractionHotspot,
+  type FurnitureRotation,
 } from "../../data/devTools";
+import {
+  classifyDevToolsItem,
+  type DevToolsCatalogGroup,
+} from "../../data/itemGroups";
 import type { CollisionKind } from "../../data/inventory";
 import type { MiniGameType } from "../../data/minigames";
+import { FurnitureCapabilitiesPanel } from "./FurnitureCapabilitiesPanel";
+import {
+  ClothesItemsEditor,
+  DishesItemsEditor,
+  GroceryItemsEditor,
+  HousingSkuEditor,
+  useCatalogExtrasState,
+} from "./CatalogExtrasEditors";
+import {
+  loadHousingSkuCatalog,
+  seedDishesFromRecipes,
+  seedHousingSkusFromInventory,
+} from "../../data/catalogExtras";
+import { SPRITE_BY_ID } from "../../data/roomLayout";
+import { PixelImage } from "../PixelImage";
+import { CatalogCropThumb } from "./CatalogAtlasSection";
+import {
+  FurnitureWorkstation,
+  type WorkstationTool,
+} from "./FurnitureWorkstation";
 
 type Props = {
-  items: FurnitureItemDefinition[];
-  sprites: SpriteAtlasEntry[];
-  onChange: (items: FurnitureItemDefinition[]) => void;
+  state: DevToolsState;
+  onStateUpdate: (updates: Partial<DevToolsState>) => void;
+  onSeedCatalog?: () => void;
 };
+
+type ItemFilter = "furniture" | "housing" | "grocery" | "clothes" | "dishes";
+
+const FILTERS: { id: ItemFilter; label: string }[] = [
+  { id: "furniture", label: "Furniture" },
+  { id: "housing", label: "Housing" },
+  { id: "grocery", label: "Grocery" },
+  { id: "clothes", label: "Clothes" },
+  { id: "dishes", label: "Dishes" },
+];
 
 const COLLISION_TYPES: (CollisionKind | null)[] = [
   "solid",
@@ -36,915 +71,767 @@ const COLLISION_TYPES: (CollisionKind | null)[] = [
 const MINI_GAME_TYPES: (MiniGameType | undefined)[] = [
   undefined,
   "cooking",
+  "frying",
   "cleaning",
   "unpack",
+  "tv",
+  "bedmaking",
+  "watering",
 ];
 
 const CATEGORIES = ["furniture", "appliance", "decoration", "seating"] as const;
 
-export function FurnitureItemEditor({ items, sprites, onChange }: Props) {
+export function FurnitureItemEditor({
+  state,
+  onStateUpdate,
+  onSeedCatalog,
+}: Props) {
+  const items = state.furnitureItems;
+  const [filter, setFilter] = useState<ItemFilter>("furniture");
+  const [housingMode, setHousingMode] = useState<"tiles" | "decor">("decor");
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState<"properties" | "collision" | "sitting" | "interactions">("properties");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [requestedTool, setRequestedTool] = useState<WorkstationTool | null>(
+    null,
+  );
+  const extras = useCatalogExtrasState();
+
+  const filteredItems = useMemo(
+    () => items.filter((i) => classifyDevToolsItem(i) === filter),
+    [items, filter],
+  );
 
   const selectedItem = items.find((i) => i.id === selectedItemId);
 
   const handleCreateNew = () => {
     const newItem = createFurnitureTemplate();
-    onChange([...items, newItem]);
+    if (filter === "housing") {
+      newItem.collision = "wallDecor";
+      newItem.anchor = "wall";
+      newItem.category = "decoration";
+      newItem.name = "New housing item";
+    }
+    onStateUpdate({ furnitureItems: [...items, newItem] });
     setSelectedItemId(newItem.id);
+    if (filter === "housing") setHousingMode("decor");
   };
 
-  const handleUpdate = (updates: Partial<FurnitureItemDefinition>) => {
+  const patchItem = (updates: Partial<FurnitureItemDefinition>) => {
     if (!selectedItemId) return;
-    onChange(
-      items.map((item) =>
-        item.id === selectedItemId
-          ? { ...item, ...updates, updatedAt: Date.now() }
-          : item,
-      ),
+    const nextItems = items.map((item) => {
+      if (item.id !== selectedItemId) return item;
+      const merged: FurnitureItemDefinition = {
+        ...item,
+        ...updates,
+        updatedAt: Date.now(),
+      };
+      if (merged.rotations && merged.rotations.length > 0) {
+        const activeSprite = merged.sprite;
+        merged.rotations = merged.rotations.map((rot) =>
+          rot.sprite === activeSprite
+            ? {
+                ...rot,
+                spriteX: merged.spriteX ?? rot.spriteX,
+                spriteY: merged.spriteY ?? rot.spriteY,
+                spriteWidth: merged.spriteWidth ?? rot.spriteWidth,
+                spriteHeight: merged.spriteHeight ?? rot.spriteHeight,
+                sittingPositions: merged.sittingPositions,
+              }
+            : rot,
+        );
+      }
+      return merged;
+    });
+    const updated = nextItems.find((i) => i.id === selectedItemId)!;
+    const cropChanged =
+      updates.spriteX != null ||
+      updates.spriteY != null ||
+      updates.spriteWidth != null ||
+      updates.spriteHeight != null ||
+      updates.spriteAtlasKey != null ||
+      updates.sprite != null;
+    onStateUpdate({
+      furnitureItems: nextItems,
+      ...(cropChanged
+        ? { spriteAtlas: syncAtlasEntryFromFurniture(state.spriteAtlas, updated) }
+        : {}),
+    });
+  };
+
+  const selectRotation = (rot: FurnitureRotation) => {
+    const current = selectedItem;
+    if (!current) return;
+    const rotations = (current.rotations ?? []).map((r) =>
+      r.sprite === current.sprite
+        ? { ...r, sittingPositions: current.sittingPositions }
+        : r,
     );
+    const target = rotations.find((r) => r.sprite === rot.sprite) ?? rot;
+    const sits =
+      target.sittingPositions && target.sittingPositions.length > 0
+        ? target.sittingPositions
+        : current.sittingPositions;
+    patchItem({
+      rotations,
+      sprite: rot.sprite,
+      spriteX: rot.spriteX,
+      spriteY: rot.spriteY,
+      spriteWidth: rot.spriteWidth,
+      spriteHeight: rot.spriteHeight,
+      sittingPositions: sits,
+    });
   };
 
   const handleDelete = () => {
     if (!selectedItemId) return;
-    if (confirm("Delete this item?")) {
-      onChange(items.filter((i) => i.id !== selectedItemId));
-      setSelectedItemId(null);
+    if (
+      !confirm(
+        "Delete this item from the catalog? Load catalog will not restore catalog_* deletes.",
+      )
+    ) {
+      return;
     }
+    const next = deleteFurnitureItem(state, selectedItemId);
+    onStateUpdate({
+      furnitureItems: next.furnitureItems,
+      deletedCatalogIds: next.deletedCatalogIds,
+    });
+    setSelectedItemId(null);
   };
 
-  const handleAddSittingPosition = () => {
+  const moveCatalogGroup = (group: DevToolsCatalogGroup) => {
     if (!selectedItem) return;
-    const newPos: SittingPosition = {
-      id: `sit_${Date.now()}`,
-      x: 0,
-      y: 0,
-      direction: "down",
-    };
-    handleUpdate({
-      sittingPositions: [...selectedItem.sittingPositions, newPos],
-    });
+    if (classifyDevToolsItem(selectedItem) === group) return;
+    patchItem({ catalogGroup: group });
+    setFilter(group);
+    if (group === "housing") setHousingMode("decor");
   };
 
-  const handleUpdateSittingPosition = (id: string, updates: Partial<SittingPosition>) => {
-    if (!selectedItem) return;
-    handleUpdate({
-      sittingPositions: selectedItem.sittingPositions.map((pos) =>
-        pos.id === id ? { ...pos, ...updates } : pos,
-      ),
-    });
-  };
+  const filterBar = (
+    <View style={styles.filterBar}>
+      {FILTERS.map((f) => (
+        <Pressable
+          key={f.id}
+          style={[styles.filterChip, filter === f.id && styles.filterChipOn]}
+          onPress={() => {
+            setFilter(f.id);
+            setSelectedItemId(null);
+          }}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              filter === f.id && styles.filterChipTextOn,
+            ]}
+          >
+            {f.label}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
 
-  const handleRemoveSittingPosition = (id: string) => {
-    if (!selectedItem) return;
-    handleUpdate({
-      sittingPositions: selectedItem.sittingPositions.filter((pos) => pos.id !== id),
-    });
-  };
+  if (filter === "grocery") {
+    return (
+      <View style={styles.container}>
+        {filterBar}
+        <GroceryItemsEditor
+          items={extras.grocery}
+          onChange={extras.setGrocery}
+        />
+      </View>
+    );
+  }
 
-  const handleAddInteraction = () => {
-    if (!selectedItem) return;
-    const newHotspot: InteractionHotspot = {
-      id: `int_${Date.now()}`,
-      x: 0,
-      y: 0,
-      width: 1,
-      height: 1,
-      action: "use",
-    };
-    handleUpdate({
-      interactionHotspots: [...selectedItem.interactionHotspots, newHotspot],
-    });
-  };
+  if (filter === "clothes") {
+    return (
+      <View style={styles.container}>
+        {filterBar}
+        <ClothesItemsEditor
+          items={extras.clothes}
+          onChange={extras.setClothes}
+        />
+      </View>
+    );
+  }
 
-  const handleUpdateInteraction = (id: string, updates: Partial<InteractionHotspot>) => {
-    if (!selectedItem) return;
-    handleUpdate({
-      interactionHotspots: selectedItem.interactionHotspots.map((hotspot) =>
-        hotspot.id === id ? { ...hotspot, ...updates } : hotspot,
-      ),
-    });
-  };
+  if (filter === "dishes") {
+    return (
+      <View style={styles.container}>
+        {filterBar}
+        <DishesItemsEditor
+          items={extras.dishes}
+          onChange={extras.setDishes}
+        />
+      </View>
+    );
+  }
 
-  const handleRemoveInteraction = (id: string) => {
-    if (!selectedItem) return;
-    handleUpdate({
-      interactionHotspots: selectedItem.interactionHotspots.filter(
-        (hotspot) => hotspot.id !== id,
-      ),
-    });
-  };
+  if (filter === "housing" && housingMode === "tiles") {
+    return (
+      <View style={styles.container}>
+        {filterBar}
+        <View style={styles.housingModeRow}>
+          <Pressable
+            style={[styles.filterChip, styles.filterChipOn]}
+            onPress={() => setHousingMode("tiles")}
+          >
+            <Text style={[styles.filterChipText, styles.filterChipTextOn]}>
+              Tiles & windows
+            </Text>
+          </Pressable>
+          <Pressable
+            style={styles.filterChip}
+            onPress={() => setHousingMode("decor")}
+          >
+            <Text style={styles.filterChipText}>Wall decor / floors</Text>
+          </Pressable>
+          {onSeedCatalog ? (
+            <Pressable
+              style={styles.seedBtn}
+              onPress={() => {
+                onSeedCatalog();
+                extras.setHousingSkus(
+                  seedHousingSkusFromInventory(loadHousingSkuCatalog()),
+                );
+                extras.setDishes(seedDishesFromRecipes(extras.dishes));
+              }}
+            >
+              <Text style={styles.seedBtnText}>Load catalog</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <HousingSkuEditor
+          items={extras.housingSkus}
+          onChange={extras.setHousingSkus}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      {/* Item List Sidebar */}
-      <View style={styles.sidebar}>
-        <View style={styles.sidebarHeader}>
-          <Text style={styles.sidebarTitle}>Furniture Items</Text>
-          <Pressable style={styles.newBtn} onPress={handleCreateNew}>
-            <Text style={styles.newBtnText}>+ New</Text>
+      {filterBar}
+      {filter === "housing" ? (
+        <View style={styles.housingModeRow}>
+          <Pressable
+            style={styles.filterChip}
+            onPress={() => setHousingMode("tiles")}
+          >
+            <Text style={styles.filterChipText}>Tiles & windows</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.filterChip, styles.filterChipOn]}
+            onPress={() => setHousingMode("decor")}
+          >
+            <Text style={[styles.filterChipText, styles.filterChipTextOn]}>
+              Wall decor / floors
+            </Text>
           </Pressable>
         </View>
-        
-        <ScrollView style={styles.itemList}>
-          {items.map((item) => (
-            <Pressable
-              key={item.id}
-              style={[
-                styles.itemCard,
-                selectedItemId === item.id && styles.itemCardActive,
-              ]}
-              onPress={() => setSelectedItemId(item.id)}
-            >
-              <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemMeta}>
-                {item.category} · {item.price}c
-              </Text>
-            </Pressable>
-          ))}
-          
-          {items.length === 0 && (
-            <Text style={styles.emptyText}>No items yet. Create one!</Text>
-          )}
-        </ScrollView>
-      </View>
+      ) : null}
 
-      {/* Editor Panel */}
-      <View style={styles.editor}>
-        {!selectedItem ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>
-              Select an item or create a new one
+      <View style={styles.furnitureRow}>
+        <View style={styles.sidebar}>
+          <View style={styles.sidebarHeader}>
+            <Text style={styles.sidebarTitle}>
+              {filter === "housing" ? "Housing objects" : "Furniture"}
             </Text>
-          </View>
-        ) : (
-          <>
-            {/* Mode Tabs */}
-            <View style={styles.modeTabs}>
-              <Pressable
-                style={[
-                  styles.modeTab,
-                  editMode === "properties" && styles.modeTabActive,
-                ]}
-                onPress={() => setEditMode("properties")}
-              >
-                <Text
-                  style={[
-                    styles.modeTabText,
-                    editMode === "properties" && styles.modeTabTextActive,
-                  ]}
+            <View style={styles.sidebarActions}>
+              {onSeedCatalog ? (
+                <Pressable
+                  style={styles.seedBtn}
+                  onPress={() => {
+                    onSeedCatalog();
+                    extras.setHousingSkus(
+                      seedHousingSkusFromInventory(loadHousingSkuCatalog()),
+                    );
+                    extras.setDishes(
+                      seedDishesFromRecipes(extras.dishes),
+                    );
+                  }}
                 >
-                  Properties
-                </Text>
-              </Pressable>
-              
-              <Pressable
-                style={[
-                  styles.modeTab,
-                  editMode === "collision" && styles.modeTabActive,
-                ]}
-                onPress={() => setEditMode("collision")}
-              >
-                <Text
-                  style={[
-                    styles.modeTabText,
-                    editMode === "collision" && styles.modeTabTextActive,
-                  ]}
-                >
-                  Collision
-                </Text>
-              </Pressable>
-              
-              <Pressable
-                style={[
-                  styles.modeTab,
-                  editMode === "sitting" && styles.modeTabActive,
-                ]}
-                onPress={() => setEditMode("sitting")}
-              >
-                <Text
-                  style={[
-                    styles.modeTabText,
-                    editMode === "sitting" && styles.modeTabTextActive,
-                  ]}
-                >
-                  Sitting
-                </Text>
-              </Pressable>
-              
-              <Pressable
-                style={[
-                  styles.modeTab,
-                  editMode === "interactions" && styles.modeTabActive,
-                ]}
-                onPress={() => setEditMode("interactions")}
-              >
-                <Text
-                  style={[
-                    styles.modeTabText,
-                    editMode === "interactions" && styles.modeTabTextActive,
-                  ]}
-                >
-                  Interactions
-                </Text>
+                  <Text style={styles.seedBtnText}>Load catalog</Text>
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.newBtn} onPress={handleCreateNew}>
+                <Text style={styles.newBtnText}>+ New</Text>
               </Pressable>
             </View>
+          </View>
 
-            <ScrollView style={styles.editorContent}>
-              {editMode === "properties" && (
-                <View style={styles.form}>
-                  <Text style={styles.sectionTitle}>Basic Properties</Text>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Name</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={selectedItem.name}
-                      onChangeText={(name) => handleUpdate({ name })}
-                      placeholder="Item name"
-                    />
-                  </View>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Description</Text>
-                    <TextInput
-                      style={[styles.input, styles.textArea]}
-                      value={selectedItem.description}
-                      onChangeText={(description) => handleUpdate({ description })}
-                      placeholder="Item description"
-                      multiline
-                      numberOfLines={3}
-                    />
-                  </View>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Category</Text>
-                    <View style={styles.segmentedControl}>
-                      {CATEGORIES.map((cat) => (
-                        <Pressable
-                          key={cat}
+          <ScrollView style={styles.itemList}>
+            {filteredItems.map((item) => (
+              <Pressable
+                key={item.id}
+                style={[
+                  styles.itemCard,
+                  selectedItemId === item.id && styles.itemCardActive,
+                ]}
+                onPress={() => setSelectedItemId(item.id)}
+              >
+                <CatalogCropThumb
+                  crop={{
+                    atlasKey: item.spriteAtlasKey ?? "interior",
+                    spriteX: item.spriteX,
+                    spriteY: item.spriteY,
+                    spriteWidth: item.spriteWidth,
+                    spriteHeight: item.spriteHeight,
+                  }}
+                  size={32}
+                  fallback={
+                    SPRITE_BY_ID[item.sprite]?.source ? (
+                      <PixelImage
+                        source={SPRITE_BY_ID[item.sprite]!.source}
+                        width={32}
+                        height={32}
+                      />
+                    ) : null
+                  }
+                />
+                <View style={styles.itemTextCol}>
+                  <Text style={styles.itemName} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.itemMeta}>
+                    {item.category} · {item.price}c
+                    {item.sellableInStore === false ? " · hidden" : " · store"}
+                  </Text>
+                </View>
+              </Pressable>
+            ))}
+
+            {filteredItems.length === 0 && (
+              <Text style={styles.emptyText}>
+                No items yet. Load catalog or create one.
+              </Text>
+            )}
+          </ScrollView>
+          {(state.deletedCatalogIds?.length ?? 0) > 0 ? (
+            <Text style={styles.tombstoneNote}>
+              {state.deletedCatalogIds.length} catalog delete(s) remembered
+            </Text>
+          ) : null}
+        </View>
+
+        <View style={styles.editor}>
+          {!selectedItem ||
+          classifyDevToolsItem(selectedItem) !== filter ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>
+                Select an item — crop, hitbox, sit, interact, and capabilities on
+                one canvas.
+              </Text>
+            </View>
+          ) : (
+            <ScrollView
+              style={styles.editorScroll}
+              contentContainerStyle={styles.editorContent}
+            >
+              <View style={styles.headerRow}>
+                <View style={{ flex: 1 }}>
+                  <TextInput
+                    style={styles.nameInput}
+                    value={selectedItem.name}
+                    onChangeText={(name) => patchItem({ name })}
+                  />
+                  <Text style={styles.spriteId}>{selectedItem.sprite}</Text>
+                </View>
+                <Pressable style={styles.deleteBtn} onPress={handleDelete}>
+                  <Text style={styles.deleteBtnText}>Delete</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.propsRow}>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Category</Text>
+                  <View style={styles.segmented}>
+                    {CATEGORIES.map((c) => (
+                      <Pressable
+                        key={c}
+                        style={[
+                          styles.segment,
+                          selectedItem.category === c && styles.segmentActive,
+                        ]}
+                        onPress={() => patchItem({ category: c })}
+                      >
+                        <Text
                           style={[
-                            styles.segment,
-                            selectedItem.category === cat && styles.segmentActive,
+                            styles.segmentText,
+                            selectedItem.category === c &&
+                              styles.segmentTextActive,
                           ]}
-                          onPress={() => handleUpdate({ category: cat })}
                         >
-                          <Text
-                            style={[
-                              styles.segmentText,
-                              selectedItem.category === cat && styles.segmentTextActive,
-                            ]}
-                          >
-                            {cat}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
+                          {c.slice(0, 4)}
+                        </Text>
+                      </Pressable>
+                    ))}
                   </View>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Price (coins)</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={String(selectedItem.price)}
-                      onChangeText={(text) => {
-                        const price = parseInt(text) || 0;
-                        handleUpdate({ price });
-                      }}
-                      keyboardType="numeric"
-                      placeholder="0"
-                    />
-                  </View>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Mini-Game</Text>
-                    <View style={styles.segmentedControl}>
-                      {MINI_GAME_TYPES.map((game) => (
-                        <Pressable
-                          key={game ?? "none"}
+                </View>
+                <View style={[styles.field, { width: 80 }]}>
+                  <Text style={styles.label}>Price</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={String(selectedItem.price)}
+                    keyboardType="numeric"
+                    onChangeText={(t) =>
+                      patchItem({ price: parseInt(t, 10) || 0 })
+                    }
+                  />
+                </View>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Collision</Text>
+                  <View style={styles.segmented}>
+                    {COLLISION_TYPES.map((type) => (
+                      <Pressable
+                        key={type ?? "none"}
+                        style={[
+                          styles.segment,
+                          selectedItem.collision === type &&
+                            styles.segmentActive,
+                        ]}
+                        onPress={() => patchItem({ collision: type })}
+                      >
+                        <Text
                           style={[
-                            styles.segment,
-                            selectedItem.miniGame === game && styles.segmentActive,
+                            styles.segmentText,
+                            selectedItem.collision === type &&
+                              styles.segmentTextActive,
                           ]}
-                          onPress={() => handleUpdate({ miniGame: game })}
                         >
-                          <Text
-                            style={[
-                              styles.segmentText,
-                              selectedItem.miniGame === game && styles.segmentTextActive,
-                            ]}
-                          >
-                            {game ?? "none"}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
+                          {type ?? "none"}
+                        </Text>
+                      </Pressable>
+                    ))}
                   </View>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Requires Unpacking</Text>
+                </View>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Mini-game</Text>
+                  <View style={styles.segmented}>
+                    {MINI_GAME_TYPES.map((mg) => (
+                      <Pressable
+                        key={mg ?? "none"}
+                        style={[
+                          styles.segment,
+                          selectedItem.miniGame === mg && styles.segmentActive,
+                        ]}
+                        onPress={() => patchItem({ miniGame: mg })}
+                      >
+                        <Text
+                          style={[
+                            styles.segmentText,
+                            selectedItem.miniGame === mg &&
+                              styles.segmentTextActive,
+                          ]}
+                        >
+                          {mg ?? "none"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+                <View style={styles.field}>
+                  <Text style={styles.label}>In Store catalog</Text>
+                  <View style={styles.segmented}>
                     <Pressable
-                      style={styles.checkbox}
-                      onPress={() =>
-                        handleUpdate({ requiresUnpacking: !selectedItem.requiresUnpacking })
-                      }
+                      style={[
+                        styles.segment,
+                        selectedItem.sellableInStore !== false &&
+                          styles.segmentActive,
+                      ]}
+                      onPress={() => patchItem({ sellableInStore: true })}
                     >
-                      <View
+                      <Text
                         style={[
-                          styles.checkboxBox,
-                          selectedItem.requiresUnpacking && styles.checkboxBoxChecked,
+                          styles.segmentText,
+                          selectedItem.sellableInStore !== false &&
+                            styles.segmentTextActive,
                         ]}
                       >
-                        {selectedItem.requiresUnpacking && (
-                          <Text style={styles.checkboxCheck}>✓</Text>
-                        )}
-                      </View>
-                      <Text style={styles.checkboxLabel}>
-                        Item needs to be unpacked before use
+                        Sellable
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.segment,
+                        selectedItem.sellableInStore === false &&
+                          styles.segmentActive,
+                      ]}
+                      onPress={() => patchItem({ sellableInStore: false })}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentText,
+                          selectedItem.sellableInStore === false &&
+                            styles.segmentTextActive,
+                        ]}
+                      >
+                        Hidden
                       </Text>
                     </Pressable>
                   </View>
                 </View>
-              )}
-
-              {editMode === "collision" && (
-                <View style={styles.form}>
-                  <Text style={styles.sectionTitle}>Collision & Physics</Text>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Collision Type</Text>
-                    <View style={styles.segmentedControl}>
-                      {COLLISION_TYPES.map((type) => (
+                <View style={styles.field}>
+                  <Text style={styles.label}>Items / Store group</Text>
+                  <View style={styles.segmented}>
+                    {(["furniture", "housing"] as const).map((group) => {
+                      const on = classifyDevToolsItem(selectedItem) === group;
+                      return (
                         <Pressable
-                          key={type ?? "none"}
-                          style={[
-                            styles.segment,
-                            selectedItem.collision === type && styles.segmentActive,
-                          ]}
-                          onPress={() => handleUpdate({ collision: type })}
+                          key={group}
+                          style={[styles.segment, on && styles.segmentActive]}
+                          onPress={() => moveCatalogGroup(group)}
                         >
                           <Text
                             style={[
                               styles.segmentText,
-                              selectedItem.collision === type && styles.segmentTextActive,
+                              on && styles.segmentTextActive,
                             ]}
                           >
-                            {type ?? "none"}
+                            {group === "furniture" ? "Furniture" : "Housing"}
                           </Text>
                         </Pressable>
-                      ))}
-                    </View>
-                  </View>
-                  
-                  <View style={styles.field}>
-                    <Text style={styles.label}>Anchor</Text>
-                    <View style={styles.segmentedControl}>
-                      <Pressable
-                        style={[
-                          styles.segment,
-                          selectedItem.anchor === "floor" && styles.segmentActive,
-                        ]}
-                        onPress={() => handleUpdate({ anchor: "floor" })}
-                      >
-                        <Text
-                          style={[
-                            styles.segmentText,
-                            selectedItem.anchor === "floor" && styles.segmentTextActive,
-                          ]}
-                        >
-                          floor
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        style={[
-                          styles.segment,
-                          selectedItem.anchor === "wall" && styles.segmentActive,
-                        ]}
-                        onPress={() => handleUpdate({ anchor: "wall" })}
-                      >
-                        <Text
-                          style={[
-                            styles.segmentText,
-                            selectedItem.anchor === "wall" && styles.segmentTextActive,
-                          ]}
-                        >
-                          wall
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                  
-                  <View style={styles.row}>
-                    <View style={[styles.field, { flex: 1 }]}>
-                      <Text style={styles.label}>Grid Width</Text>
-                      <TextInput
-                        style={styles.input}
-                        value={String(selectedItem.gridWidth)}
-                        onChangeText={(text) => {
-                          const gridWidth = parseInt(text) || 1;
-                          handleUpdate({ gridWidth });
-                        }}
-                        keyboardType="numeric"
-                      />
-                    </View>
-                    
-                    <View style={[styles.field, { flex: 1 }]}>
-                      <Text style={styles.label}>Grid Height</Text>
-                      <TextInput
-                        style={styles.input}
-                        value={String(selectedItem.gridHeight)}
-                        onChangeText={(text) => {
-                          const gridHeight = parseInt(text) || 1;
-                          handleUpdate({ gridHeight });
-                        }}
-                        keyboardType="numeric"
-                      />
-                    </View>
+                      );
+                    })}
                   </View>
                 </View>
-              )}
+              </View>
 
-              {editMode === "sitting" && (
-                <View style={styles.form}>
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Sitting Positions</Text>
-                    <Pressable style={styles.addBtn} onPress={handleAddSittingPosition}>
-                      <Text style={styles.addBtnText}>+ Add Position</Text>
-                    </Pressable>
-                  </View>
-                  
-                  {selectedItem.sittingPositions.map((pos) => (
-                    <View key={pos.id} style={styles.listItem}>
-                      <Text style={styles.listItemTitle}>Position #{pos.id.slice(-4)}</Text>
-                      
-                      <View style={styles.row}>
-                        <View style={[styles.field, { flex: 1 }]}>
-                          <Text style={styles.label}>X</Text>
-                          <TextInput
-                            style={styles.input}
-                            value={String(pos.x)}
-                            onChangeText={(text) => {
-                              const x = parseFloat(text) || 0;
-                              handleUpdateSittingPosition(pos.id, { x });
-                            }}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                        
-                        <View style={[styles.field, { flex: 1 }]}>
-                          <Text style={styles.label}>Y</Text>
-                          <TextInput
-                            style={styles.input}
-                            value={String(pos.y)}
-                            onChangeText={(text) => {
-                              const y = parseFloat(text) || 0;
-                              handleUpdateSittingPosition(pos.id, { y });
-                            }}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                      </View>
-                      
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Direction</Text>
-                        <View style={styles.segmentedControl}>
-                          {["left", "right", "up", "down"].map((dir) => (
-                            <Pressable
-                              key={dir}
-                              style={[
-                                styles.segment,
-                                pos.direction === dir && styles.segmentActive,
-                              ]}
-                              onPress={() =>
-                                handleUpdateSittingPosition(pos.id, {
-                                  direction: dir as any,
-                                })
-                              }
-                            >
-                              <Text
-                                style={[
-                                  styles.segmentText,
-                                  pos.direction === dir && styles.segmentTextActive,
-                                ]}
-                              >
-                                {dir}
-                              </Text>
-                            </Pressable>
-                          ))}
-                        </View>
-                      </View>
-                      
-                      <Pressable
-                        style={styles.removeBtn}
-                        onPress={() => handleRemoveSittingPosition(pos.id)}
-                      >
-                        <Text style={styles.removeBtnText}>Remove</Text>
-                      </Pressable>
-                    </View>
-                  ))}
-                  
-                  {selectedItem.sittingPositions.length === 0 && (
-                    <Text style={styles.emptyText}>
-                      No sitting positions defined. Add one above.
-                    </Text>
-                  )}
-                </View>
-              )}
+              <FurnitureCapabilitiesPanel
+                item={selectedItem}
+                onChange={patchItem}
+                onSelectRotation={selectRotation}
+                onOpenOverlayTool={() => setRequestedTool("overlay")}
+              />
 
-              {editMode === "interactions" && (
-                <View style={styles.form}>
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Interaction Hotspots</Text>
-                    <Pressable style={styles.addBtn} onPress={handleAddInteraction}>
-                      <Text style={styles.addBtnText}>+ Add Hotspot</Text>
-                    </Pressable>
-                  </View>
-                  
-                  {selectedItem.interactionHotspots.map((hotspot) => (
-                    <View key={hotspot.id} style={styles.listItem}>
-                      <Text style={styles.listItemTitle}>
-                        Hotspot #{hotspot.id.slice(-4)}
-                      </Text>
-                      
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Action Name</Text>
+              <View style={styles.workstationBox}>
+                <FurnitureWorkstation
+                  item={selectedItem}
+                  onChange={patchItem}
+                  requestedTool={requestedTool}
+                  onRequestedToolConsumed={() => setRequestedTool(null)}
+                />
+              </View>
+
+              <Pressable
+                style={styles.advancedToggle}
+                onPress={() => setShowAdvanced((v) => !v)}
+              >
+                <Text style={styles.advancedToggleText}>
+                  {showAdvanced ? "Hide" : "Show"} advanced numbers
+                </Text>
+              </Pressable>
+
+              {showAdvanced ? (
+                <View style={styles.advanced}>
+                  <Text style={styles.label}>
+                    Crop x,y,w,h · grid · hitPad (prefer canvas)
+                  </Text>
+                  <View style={styles.numRow}>
+                    {(
+                      [
+                        ["spriteX", selectedItem.spriteX ?? 0],
+                        ["spriteY", selectedItem.spriteY ?? 0],
+                        ["spriteWidth", selectedItem.spriteWidth ?? 16],
+                        ["spriteHeight", selectedItem.spriteHeight ?? 16],
+                        ["gridWidth", selectedItem.gridWidth],
+                        ["gridHeight", selectedItem.gridHeight],
+                        ["hitPad", selectedItem.hitPad ?? 0],
+                      ] as const
+                    ).map(([key, val]) => (
+                      <View key={key} style={styles.numField}>
+                        <Text style={styles.numLabel}>{key}</Text>
                         <TextInput
                           style={styles.input}
-                          value={hotspot.action}
-                          onChangeText={(action) =>
-                            handleUpdateInteraction(hotspot.id, { action })
+                          value={String(val)}
+                          keyboardType="numeric"
+                          onChangeText={(t) =>
+                            patchItem({ [key]: parseInt(t, 10) || 0 })
                           }
-                          placeholder="use"
                         />
                       </View>
-                      
-                      <View style={styles.row}>
-                        <View style={[styles.field, { flex: 1 }]}>
-                          <Text style={styles.label}>X</Text>
-                          <TextInput
-                            style={styles.input}
-                            value={String(hotspot.x)}
-                            onChangeText={(text) => {
-                              const x = parseFloat(text) || 0;
-                              handleUpdateInteraction(hotspot.id, { x });
-                            }}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                        
-                        <View style={[styles.field, { flex: 1 }]}>
-                          <Text style={styles.label}>Y</Text>
-                          <TextInput
-                            style={styles.input}
-                            value={String(hotspot.y)}
-                            onChangeText={(text) => {
-                              const y = parseFloat(text) || 0;
-                              handleUpdateInteraction(hotspot.id, { y });
-                            }}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                      </View>
-                      
-                      <View style={styles.row}>
-                        <View style={[styles.field, { flex: 1 }]}>
-                          <Text style={styles.label}>Width</Text>
-                          <TextInput
-                            style={styles.input}
-                            value={String(hotspot.width)}
-                            onChangeText={(text) => {
-                              const width = parseFloat(text) || 1;
-                              handleUpdateInteraction(hotspot.id, { width });
-                            }}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                        
-                        <View style={[styles.field, { flex: 1 }]}>
-                          <Text style={styles.label}>Height</Text>
-                          <TextInput
-                            style={styles.input}
-                            value={String(hotspot.height)}
-                            onChangeText={(text) => {
-                              const height = parseFloat(text) || 1;
-                              handleUpdateInteraction(hotspot.id, { height });
-                            }}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                      </View>
-                      
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Triggers Mini-Game</Text>
-                        <View style={styles.segmentedControl}>
-                          {MINI_GAME_TYPES.map((game) => (
-                            <Pressable
-                              key={game ?? "none"}
-                              style={[
-                                styles.segment,
-                                hotspot.miniGame === game && styles.segmentActive,
-                              ]}
-                              onPress={() =>
-                                handleUpdateInteraction(hotspot.id, { miniGame: game })
-                              }
-                            >
-                              <Text
-                                style={[
-                                  styles.segmentText,
-                                  hotspot.miniGame === game && styles.segmentTextActive,
-                                ]}
-                              >
-                                {game ?? "none"}
-                              </Text>
-                            </Pressable>
-                          ))}
-                        </View>
-                      </View>
-                      
-                      <Pressable
-                        style={styles.removeBtn}
-                        onPress={() => handleRemoveInteraction(hotspot.id)}
-                      >
-                        <Text style={styles.removeBtnText}>Remove</Text>
-                      </Pressable>
-                    </View>
-                  ))}
-                  
-                  {selectedItem.interactionHotspots.length === 0 && (
-                    <Text style={styles.emptyText}>
-                      No interaction hotspots defined. Add one above.
-                    </Text>
-                  )}
+                    ))}
+                  </View>
                 </View>
-              )}
+              ) : null}
             </ScrollView>
-
-            {/* Actions */}
-            <View style={styles.actions}>
-              <Pressable style={styles.deleteBtn} onPress={handleDelete}>
-                <Text style={styles.deleteBtnText}>🗑️ Delete Item</Text>
-              </Pressable>
-            </View>
-          </>
-        )}
+          )}
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  container: { flex: 1, minHeight: 0 },
+  filterBar: {
     flexDirection: "row",
-  },
-  sidebar: {
-    width: 250,
-    backgroundColor: colors.surfaceRaised,
-    borderRightWidth: 2,
-    borderRightColor: colors.borderStrong,
-  },
-  sidebarHeader: {
-    padding: space.md,
-    borderBottomWidth: 2,
-    borderBottomColor: colors.border,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  sidebarTitle: {
-    ...typography.body,
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.ink,
-  },
-  newBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: radii.md,
+    flexWrap: "wrap",
+    gap: 6,
     paddingHorizontal: space.sm,
-    paddingVertical: 4,
-  },
-  newBtnText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: colors.surfaceRaised,
-  },
-  itemList: {
-    flex: 1,
-  },
-  itemCard: {
-    padding: space.md,
+    paddingTop: space.sm,
+    paddingBottom: 4,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  itemCardActive: {
-    backgroundColor: colors.accentSoft,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accent,
+  housingModeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    paddingHorizontal: space.sm,
+    paddingVertical: 6,
+    backgroundColor: colors.surfaceRaised,
   },
-  itemName: {
+  filterChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
+  },
+  filterChipOn: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.accent,
+  },
+  filterChipText: { fontSize: 11, fontWeight: "700", color: colors.inkMuted },
+  filterChipTextOn: { color: colors.ink },
+  furnitureRow: { flex: 1, flexDirection: "row", minHeight: 0 },
+  sidebar: {
+    width: 220,
+    borderRightWidth: 2,
+    borderRightColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  sidebarHeader: {
+    padding: space.sm,
+    gap: 8,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.border,
+  },
+  sidebarTitle: {
+    ...typography.brand,
     fontSize: 14,
     fontWeight: "700",
     color: colors.ink,
   },
-  itemMeta: {
+  sidebarActions: { flexDirection: "row", gap: 6, flexWrap: "wrap" },
+  seedBtn: {
+    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+  },
+  seedBtnText: { fontSize: 11, fontWeight: "700", color: colors.ink },
+  newBtn: {
+    backgroundColor: colors.accent,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+  },
+  newBtnText: { fontSize: 11, fontWeight: "700", color: colors.surfaceRaised },
+  itemList: { flex: 1 },
+  itemCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: space.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  itemCardActive: { backgroundColor: colors.accentSoft },
+  itemTextCol: { flex: 1, minWidth: 0 },
+  itemName: { fontSize: 13, fontWeight: "700", color: colors.ink },
+  itemMeta: { fontSize: 10, color: colors.inkMuted },
+  emptyText: {
+    padding: space.md,
+    color: colors.inkFaint,
     fontSize: 12,
+  },
+  tombstoneNote: {
+    padding: 6,
+    fontSize: 10,
     color: colors.inkMuted,
-    marginTop: 2,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  editor: {
-    flex: 1,
-  },
+  editor: { flex: 1, minWidth: 0, backgroundColor: colors.surfaceRaised },
+  editorScroll: { flex: 1 },
+  editorContent: { padding: space.md, gap: space.sm, paddingBottom: 40 },
   emptyState: {
     flex: 1,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
   },
-  emptyStateText: {
-    fontSize: 16,
-    color: colors.inkMuted,
-  },
-  modeTabs: {
-    flexDirection: "row",
-    backgroundColor: colors.surface,
+  emptyStateText: { color: colors.inkMuted, textAlign: "center", fontSize: 14 },
+  headerRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
+  nameInput: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: colors.ink,
     borderBottomWidth: 2,
     borderBottomColor: colors.borderStrong,
+    paddingVertical: 4,
   },
-  modeTab: {
-    flex: 1,
-    paddingVertical: space.md,
-    alignItems: "center",
-    borderBottomWidth: 3,
-    borderBottomColor: "transparent",
+  spriteId: { fontSize: 11, color: colors.inkFaint, marginTop: 2 },
+  deleteBtn: {
+    backgroundColor: colors.danger,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
   },
-  modeTabActive: {
-    borderBottomColor: colors.accent,
-    backgroundColor: colors.accentSoft,
-  },
-  modeTabText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.inkMuted,
-  },
-  modeTabTextActive: {
-    color: colors.accent,
-  },
-  editorContent: {
-    flex: 1,
-  },
-  form: {
-    padding: space.lg,
-    gap: space.lg,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: space.md,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: colors.ink,
-  },
-  field: {
-    gap: space.xs,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: colors.inkMuted,
-    textTransform: "uppercase",
-  },
+  deleteBtnText: { color: "#fff", fontWeight: "700", fontSize: 12 },
+  propsRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  field: { gap: 4 },
+  label: { fontSize: 10, fontWeight: "700", color: colors.inkMuted },
   input: {
-    backgroundColor: colors.surfaceRaised,
     borderWidth: 2,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     borderRadius: radii.md,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    fontSize: 15,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 12,
     color: colors.ink,
+    backgroundColor: colors.surface,
+    minWidth: 56,
   },
-  textArea: {
-    minHeight: 80,
-    textAlignVertical: "top",
-  },
-  segmentedControl: {
-    flexDirection: "row",
-    gap: space.xs,
-    flexWrap: "wrap",
-  },
+  segmented: { flexDirection: "row", flexWrap: "wrap", gap: 4 },
   segment: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: colors.surfaceRaised,
-    borderWidth: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radii.md,
+    backgroundColor: colors.surface,
   },
   segmentActive: {
     backgroundColor: colors.accent,
-    borderColor: colors.accent,
+    borderColor: colors.borderStrong,
   },
-  segmentText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.ink,
-  },
-  segmentTextActive: {
-    color: colors.surfaceRaised,
-  },
-  checkbox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
-  },
-  checkboxBox: {
-    width: 24,
-    height: 24,
+  segmentText: { fontSize: 10, fontWeight: "700", color: colors.inkMuted },
+  segmentTextActive: { color: colors.surfaceRaised },
+  workstationBox: {
+    minHeight: 360,
+    height: 420,
     borderWidth: 2,
-    borderColor: colors.border,
-    borderRadius: radii.sm,
-    backgroundColor: colors.surfaceRaised,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  checkboxBoxChecked: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-  },
-  checkboxCheck: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.surfaceRaised,
-  },
-  checkboxLabel: {
-    fontSize: 14,
-    color: colors.ink,
-  },
-  row: {
-    flexDirection: "row",
-    gap: space.md,
-  },
-  addBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: radii.md,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-  },
-  addBtnText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.surfaceRaised,
-  },
-  listItem: {
-    backgroundColor: colors.surfaceRaised,
-    borderWidth: 2,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     borderRadius: radii.lg,
-    padding: space.md,
-    gap: space.md,
-    marginBottom: space.md,
+    padding: space.sm,
+    backgroundColor: colors.surface,
   },
-  listItemTitle: {
-    fontSize: 15,
+  advancedToggle: { alignSelf: "flex-start", paddingVertical: 6 },
+  advancedToggleText: {
+    fontSize: 12,
     fontWeight: "700",
-    color: colors.ink,
+    color: colors.accent,
+    textDecorationLine: "underline",
   },
-  removeBtn: {
-    backgroundColor: colors.bgDeep,
-    borderWidth: 2,
-    borderColor: colors.border,
-    borderRadius: radii.md,
-    paddingVertical: space.sm,
-    alignItems: "center",
-  },
-  removeBtnText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.inkMuted,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: colors.inkMuted,
-    fontStyle: "italic",
-    textAlign: "center",
-    padding: space.lg,
-  },
-  actions: {
-    padding: space.md,
-    borderTopWidth: 2,
-    borderTopColor: colors.border,
-  },
-  deleteBtn: {
-    backgroundColor: "#FF4444",
-    borderRadius: radii.lg,
-    paddingVertical: space.md,
-    alignItems: "center",
-  },
-  deleteBtnText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#FFFFFF",
-  },
+  advanced: { gap: 6 },
+  numRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  numField: { width: 100, gap: 2 },
+  numLabel: { fontSize: 9, color: colors.inkFaint },
 });

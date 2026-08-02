@@ -2,12 +2,14 @@ import {
   AUTO_INTERACTIONS,
   canStartAction,
   isLocationAction,
+  recentlyPlayerCommanded,
 } from "./actions.js";
 import {
   areNearForConversation,
   findFreeSpotForAction,
   separateFromOthers,
 } from "./hotspots.js";
+import type { SolidBox } from "./layout.js";
 import { performAction } from "./perform-action.js";
 import { getMemberState, listActiveMembers, withMemberState } from "./room.js";
 import type { ActionKind, CharacterId, Room, RoomActionLogEntry } from "./types.js";
@@ -19,8 +21,15 @@ export type SimulationConfig = {
   maxAutoInteractions: number;
   /** Characters that should not auto-wander this tick (e.g. player-scrolled). */
   skipWanderIds?: CharacterId[];
+  /**
+   * Characters that must not receive auto interactions this tick
+   * (player commands / camera control).
+   */
+  skipAutoIds?: CharacterId[];
   /** Logical floor width (defaults to home chunk span). */
   floorMaxX?: number;
+  /** Solid furniture AABBs — characters walk around these. */
+  solidBoxes?: SolidBox[];
 };
 
 export const DEFAULT_SIM_CONFIG: SimulationConfig = {
@@ -59,6 +68,7 @@ function wander(
   rand: () => number,
   now: number,
   maxX?: number,
+  solids: SolidBox[] = [],
 ): Room {
   const member = room.memberState[String(characterId)];
   if (!member || member.presence !== "active") {
@@ -89,7 +99,14 @@ function wander(
     x: member.position.x + dx * 0.42,
     y: member.position.y + dy * 0.35,
   };
-  const nextPos = separateFromOthers(room, characterId, raw, 0.85, maxX);
+  const nextPos = separateFromOthers(
+    room,
+    characterId,
+    raw,
+    0.85,
+    maxX,
+    solids,
+  );
   const moved =
     Math.abs(nextPos.x - member.position.x) > 0.01 ||
     Math.abs(nextPos.y - member.position.y) > 0.01;
@@ -149,9 +166,14 @@ function eligibleForAction(
   actorId: CharacterId,
   action: ActionKind,
   now: number,
+  skipAuto: ReadonlySet<string>,
 ): boolean {
   const member = getMemberState(room, actorId);
   if (member.presence !== "active") return false;
+  if (skipAuto.has(String(actorId))) return false;
+  if (recentlyPlayerCommanded(room.actionLog, String(actorId), now)) {
+    return false;
+  }
   return canStartAction(member, action, room.actionLog, now);
 }
 
@@ -181,10 +203,25 @@ export function tickRoom(
   let next = room;
   const active = listActiveMembers(next);
   const skipWander = new Set((config.skipWanderIds ?? []).map(String));
+  const skipAuto = new Set((config.skipAutoIds ?? []).map(String));
+  // Player *commands also freeze wander so the character stays put / on-spot.
+  for (const member of active) {
+    if (recentlyPlayerCommanded(next.actionLog, String(member.characterId), now)) {
+      skipWander.add(String(member.characterId));
+      skipAuto.add(String(member.characterId));
+    }
+  }
 
   for (const member of active) {
     if (skipWander.has(String(member.characterId))) continue;
-    next = wander(next, member.characterId, rand, now, config.floorMaxX);
+    next = wander(
+      next,
+      member.characterId,
+      rand,
+      now,
+      config.floorMaxX,
+      config.solidBoxes ?? [],
+    );
   }
 
   const activeIds = listActiveMembers(next).map((m) => m.characterId);
@@ -206,7 +243,7 @@ export function tickRoom(
     try {
       if (action === "sit" || action === "sing") {
         const candidates = activeIds.filter((id) =>
-          eligibleForAction(next, id, action, now),
+          eligibleForAction(next, id, action, now, skipAuto),
         );
         if (candidates.length === 0) continue;
         const actorId = candidates[Math.floor(rand() * candidates.length)];
@@ -217,17 +254,19 @@ export function tickRoom(
         const result = performAction(next, actorId, action, {
           source: "auto",
           now,
+          solidBoxes: config.solidBoxes ?? [],
         });
         next = result.room;
         events.push(result.logEntry);
       } else {
         const pair = pickNearPair(next, activeIds, rand);
         if (!pair) continue;
-        if (!eligibleForAction(next, pair[0], action, now)) continue;
+        if (!eligibleForAction(next, pair[0], action, now, skipAuto)) continue;
         const result = performAction(next, pair[0], action, {
           targetId: pair[1],
           source: "auto",
           now,
+          solidBoxes: config.solidBoxes ?? [],
         });
         next = result.room;
         events.push(result.logEntry);

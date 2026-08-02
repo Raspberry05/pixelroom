@@ -15,6 +15,36 @@ export type SyncedLayout = RoomLayoutPayload & {
   fromUserKey?: DemoUserKey;
 };
 
+export type LayoutImportPending = {
+  roomId: string;
+  fromUserKey: DemoUserKey;
+  document: RoomDocument;
+  approvals: DemoUserKey[];
+  required: DemoUserKey[];
+};
+
+export type LayoutImportResolved = {
+  roomId: string;
+  status: "applied" | "declined" | "cancelled";
+  fromUserKey: DemoUserKey;
+  byUserKey?: DemoUserKey;
+  document?: RoomDocument;
+};
+
+export type LayoutResetPending = {
+  roomId: string;
+  fromUserKey: DemoUserKey;
+  approvals: DemoUserKey[];
+  required: DemoUserKey[];
+};
+
+export type LayoutResetResolved = {
+  roomId: string;
+  status: "applied" | "declined" | "cancelled";
+  fromUserKey: DemoUserKey;
+  byUserKey?: DemoUserKey;
+};
+
 export type IncomingCall = {
   roomId: string;
   fromKey: DemoUserKey;
@@ -64,6 +94,14 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
   roomRef.current = room;
   const [messages, setMessages] = useState<ChatLine[]>([]);
   const [layout, setLayout] = useState<SyncedLayout | null>(null);
+  const [layoutImportPending, setLayoutImportPending] =
+    useState<LayoutImportPending | null>(null);
+  const [layoutImportResolved, setLayoutImportResolved] =
+    useState<LayoutImportResolved | null>(null);
+  const [layoutResetPending, setLayoutResetPending] =
+    useState<LayoutResetPending | null>(null);
+  const [layoutResetResolved, setLayoutResetResolved] =
+    useState<LayoutResetResolved | null>(null);
   const [peerTyping, setPeerTyping] = useState<Partial<Record<DemoUserKey, boolean>>>({});
   const [lastError, setLastError] = useState<string | null>(null);
   /** Chat events for notifications (includes messages while not in that room). */
@@ -74,11 +112,22 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
   const webrtcSeqRef = useRef(0);
   const joinedRoomRef = useRef<string | null>(null);
   const joinedMemberKeysRef = useRef<DemoUserKey[] | null>(null);
+  const pendingSendRef = useRef<ClientToServer[]>([]);
 
   const send = useCallback((msg: ClientToServer) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
+      return;
+    }
+    // Don't drop leave/join — queue until the socket is open again.
+    if (
+      msg.type === "leave_room" ||
+      msg.type === "join_room" ||
+      msg.type === "refresh_rooms" ||
+      msg.type === "hello"
+    ) {
+      pendingSendRef.current.push(msg);
     }
   }, []);
 
@@ -103,6 +152,14 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
         if (cancelled) return;
         setStatus("open");
         ws.send(JSON.stringify({ type: "hello", userKey } satisfies ClientToServer));
+        // Clear any ghost "active" leftovers from prior sessions / missed leaves.
+        ws.send(JSON.stringify({ type: "refresh_rooms" } satisfies ClientToServer));
+        const queued = pendingSendRef.current;
+        pendingSendRef.current = [];
+        for (const msg of queued) {
+          if (msg.type === "hello") continue;
+          ws.send(JSON.stringify(msg));
+        }
         if (joinedRoomRef.current) {
           ws.send(
             JSON.stringify({
@@ -120,6 +177,17 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
         void (async () => {
           const data = JSON.parse(String(event.data)) as ServerToClient;
           if (data.type === "room_state") {
+            // Ignore snapshots for rooms we are not currently joined to
+            // (stale broadcasts after a hallway/room switch cause ghost "active").
+            if (
+              joinedRoomRef.current != null &&
+              String(data.room.id) !== String(joinedRoomRef.current)
+            ) {
+              return;
+            }
+            if (joinedRoomRef.current == null) {
+              return;
+            }
             setRoom(data.room);
             const decrypted = await decryptChatLines(data.messages, userKey, data.room);
             if (cancelled) return;
@@ -132,6 +200,38 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
               document: data.document,
               rev: data.rev,
               fromUserKey: data.fromUserKey,
+            });
+          } else if (data.type === "layout_import_pending") {
+            setLayoutImportPending({
+              roomId: data.roomId,
+              fromUserKey: data.fromUserKey,
+              document: data.document,
+              approvals: data.approvals,
+              required: data.required,
+            });
+          } else if (data.type === "layout_import_resolved") {
+            setLayoutImportPending(null);
+            setLayoutImportResolved({
+              roomId: data.roomId,
+              status: data.status,
+              fromUserKey: data.fromUserKey,
+              byUserKey: data.byUserKey,
+              document: data.document,
+            });
+          } else if (data.type === "layout_reset_pending") {
+            setLayoutResetPending({
+              roomId: data.roomId,
+              fromUserKey: data.fromUserKey,
+              approvals: data.approvals,
+              required: data.required,
+            });
+          } else if (data.type === "layout_reset_resolved") {
+            setLayoutResetPending(null);
+            setLayoutResetResolved({
+              roomId: data.roomId,
+              status: data.status,
+              fromUserKey: data.fromUserKey,
+              byUserKey: data.byUserKey,
             });
           } else if (data.type === "peer_typing") {
             setPeerTyping((prev) => ({ ...prev, [data.userKey]: data.isTyping }));
@@ -237,8 +337,31 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
 
     connect();
 
+    // Tab close / background: leave so peers don't keep a ghost "active".
+    const onPageHide = () => {
+      const roomId = joinedRoomRef.current;
+      if (!roomId) return;
+      joinedRoomRef.current = null;
+      joinedMemberKeysRef.current = null;
+      try {
+        wsRef.current?.send(
+          JSON.stringify({ type: "leave_room", roomId } satisfies ClientToServer),
+        );
+      } catch {
+        // ignore
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("beforeunload", onPageHide);
+    }
+
     return () => {
       cancelled = true;
+      if (typeof window !== "undefined") {
+        window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("beforeunload", onPageHide);
+      }
       if (retryTimer) clearTimeout(retryTimer);
       wsRef.current?.close();
       wsRef.current = null;
@@ -247,6 +370,11 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
 
   const joinRoom = useCallback(
     (roomId: string, memberKeys?: DemoUserKey[]) => {
+      const previous = joinedRoomRef.current;
+      if (previous && previous !== roomId) {
+        // Explicit leave so peers clear presence even if join fails/races.
+        send({ type: "leave_room", roomId: previous });
+      }
       joinedRoomRef.current = roomId;
       joinedMemberKeysRef.current = memberKeys ?? null;
       send({
@@ -260,11 +388,13 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
 
   const leaveRoom = useCallback(
     (roomId: string) => {
+      // Clear local join intent first so a reconnect cannot silently re-enter.
       if (joinedRoomRef.current === roomId) {
         joinedRoomRef.current = null;
         joinedMemberKeysRef.current = null;
       }
       send({ type: "leave_room", roomId });
+      send({ type: "refresh_rooms" });
     },
     [send],
   );
@@ -311,6 +441,48 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
   const sendRoomLayout = useCallback(
     (roomId: string, document: RoomDocument) => {
       send({ type: "set_room_layout", roomId, document });
+    },
+    [send],
+  );
+
+  const proposeLayoutImport = useCallback(
+    (roomId: string, document: RoomDocument) => {
+      send({ type: "propose_layout_import", roomId, document });
+    },
+    [send],
+  );
+
+  const voteLayoutImport = useCallback(
+    (roomId: string, approve: boolean) => {
+      send({ type: "layout_import_vote", roomId, approve });
+    },
+    [send],
+  );
+
+  const cancelLayoutImport = useCallback(
+    (roomId: string) => {
+      send({ type: "cancel_layout_import", roomId });
+    },
+    [send],
+  );
+
+  const proposeLayoutReset = useCallback(
+    (roomId: string) => {
+      send({ type: "propose_layout_reset", roomId });
+    },
+    [send],
+  );
+
+  const voteLayoutReset = useCallback(
+    (roomId: string, approve: boolean) => {
+      send({ type: "layout_reset_vote", roomId, approve });
+    },
+    [send],
+  );
+
+  const cancelLayoutReset = useCallback(
+    (roomId: string) => {
+      send({ type: "cancel_layout_reset", roomId });
     },
     [send],
   );
@@ -382,6 +554,12 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
     room,
     messages,
     layout,
+    layoutImportPending,
+    layoutImportResolved,
+    clearLayoutImportResolved: () => setLayoutImportResolved(null),
+    layoutResetPending,
+    layoutResetResolved,
+    clearLayoutResetResolved: () => setLayoutResetResolved(null),
     peerTyping,
     lastError,
     notifyChat,
@@ -399,6 +577,12 @@ export function usePixelSync(userKey: DemoUserKey, enabled = true) {
     sendPresence,
     sendRoomStyle,
     sendRoomLayout,
+    proposeLayoutImport,
+    voteLayoutImport,
+    cancelLayoutImport,
+    proposeLayoutReset,
+    voteLayoutReset,
+    cancelLayoutReset,
     sendPosition,
     sendTyping,
     sendCallInvite,

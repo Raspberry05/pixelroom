@@ -1,4 +1,4 @@
-# Pixelroom asset intake
+# Roomie asset intake
 
 Staged from `D:\Christian\Downloads\Assets` into [`assets/_incoming/`](../assets/_incoming/).
 
@@ -6,7 +6,7 @@ Staged from `D:\Christian\Downloads\Assets` into [`assets/_incoming/`](../assets
 
 ## Packs
 
-| Folder | Source zip | Count | License (as included) | Fit for Pixelroom |
+| Folder | Source zip | Count | License (as included) | Fit for Roomie |
 |--------|------------|------:|-------------------------|-------------------|
 | `characters/` | `images.zip` | 500 PNG | **Unknown — confirm before shipping** | Base doll sheets |
 | `trash/` | `trash assets.zip` | 58 PNG | **Unknown — confirm** | Moving-in / clutter room |

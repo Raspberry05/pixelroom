@@ -1,12 +1,12 @@
-# Pixelroom
+# Roomie
 
-Encrypted messaging game for mobile: chat with friends inside a shared pixel room where characters walk, sleep, and act when you're both present.
+Encrypted messaging with friends and family inside a shared pixel room — characters walk, sleep, and hang out when you're both present.
 
-> Working title — rename anytime.
+> Product name: **Roomie**. Internal packages still use `@pixelroom/*`.
 
 ## Concept
 
-Pixelroom combines Signal-style secure messaging with a lightweight Sims-like room layer:
+Roomie combines Signal-style secure messaging with a lightweight Sims-like room layer:
 
 - **1:1 and group chats** each own a shared room
 - **Presence**: active members walk and interact; absent members sleep in the room

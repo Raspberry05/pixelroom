@@ -53,6 +53,7 @@ import {
 import {
   consumePlacedFromInventory,
   createStarterInventory,
+  migrateChairInventory,
   type InventoryState,
 } from "./data/inventory";
 import { initialNav, type StackScreen } from "./navigation/types";
@@ -66,6 +67,8 @@ import { YouScreen } from "./screens/YouScreen";
 import { DevToolsScreen } from "./screens/DevToolsScreen";
 import { IntroWizardScreen } from "./screens/IntroWizardScreen";
 import {
+  clearOnboardingProfile,
+  clearUserQueryParam,
   loadOnboardingProfile,
   saveOnboardingProfile,
   setUserQueryParam,
@@ -85,7 +88,10 @@ function loadInventory(): InventoryState {
   if (Platform.OS === "web" && typeof localStorage !== "undefined") {
     try {
       const raw = localStorage.getItem(INV_KEY);
-      if (raw) return JSON.parse(raw) as InventoryState;
+      if (raw) {
+        const parsed = JSON.parse(raw) as InventoryState;
+        return migrateChairInventory(parsed);
+      }
     } catch {
       // ignore
     }
@@ -106,6 +112,7 @@ function saveInventory(inv: InventoryState) {
 
 function ensureSharpPixelsOnWeb() {
   if (Platform.OS !== "web" || typeof document === "undefined") return;
+  document.title = "Roomie";
   const id = "pixelroom-sharp-pixels";
   if (document.getElementById(id)) return;
   const style = document.createElement("style");
@@ -241,6 +248,7 @@ export default function App() {
   const [hasRemoteAudio, setHasRemoteAudio] = useState(false);
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastNotifyMsgId = useRef<string | null>(null);
+  const lastImportNotifyKey = useRef<string | null>(null);
   const lastIncomingCallAt = useRef<number>(0);
   const lastCallSignalAt = useRef<number>(0);
   const voiceRef = useRef<WebRtcVoiceSession | null>(null);
@@ -250,10 +258,31 @@ export default function App() {
   
   // Notification state
   const [notification, setNotification] = useState<Notification | null>(null);
-  
+
   // Room cleanliness state (per room)
   const [roomCleanliness, setRoomCleanliness] = useState<Record<string, RoomCleanlinessState>>({});
   const [furnitureCare, setFurnitureCare] = useState<Record<string, FurnitureCareState>>({});
+
+  useEffect(() => {
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      document.title = "Roomie";
+    }
+  }, [needsWizard, userKey]);
+
+  function signOut() {
+    const topScreen = nav.stack[nav.stack.length - 1];
+    if (topScreen?.name === "room") {
+      sync.leaveRoom(String(topScreen.roomId));
+    }
+    clearOnboardingProfile();
+    clearUserQueryParam();
+    setNeedsWizard(true);
+    setNav(initialNav);
+    setActiveCall(null);
+    setCallState("ended");
+    setCallIncoming(false);
+    setNotification(null);
+  }
 
   useEffect(() => {
     if (callState !== "connected") {
@@ -332,15 +361,71 @@ export default function App() {
     }
   }, [sync.notifyChat, userKey]);
 
+  // Layout import requests must notify in hallway / other rooms / background —
+  // not only via the in-room consent banner.
+  useEffect(() => {
+    const pending = sync.layoutImportPending;
+    if (!pending) {
+      lastImportNotifyKey.current = null;
+      return;
+    }
+    if (pending.fromUserKey === userKey) return;
+    const proposalKey = `${pending.roomId}:${pending.fromUserKey}`;
+    if (lastImportNotifyKey.current === proposalKey) return;
+    lastImportNotifyKey.current = proposalKey;
+
+    const fromName =
+      DEMO_USERS[pending.fromUserKey]?.character.displayName ??
+      pending.fromUserKey;
+    const convo = conversations.find(
+      (c) => String(c.roomId) === String(pending.roomId),
+    );
+    const roomLabel = convo?.title ?? "Room";
+    const title = "Layout import request";
+    const body = `${fromName} wants to import a layout into ${roomLabel}`;
+
+    // In-room banner already covers the live editor; still toast if elsewhere.
+    if (activeRoomId !== pending.roomId) {
+      setNotification({
+        id: `layout-import-${proposalKey}`,
+        title,
+        body,
+        timestamp: Date.now(),
+        type: "system",
+        onPress: () => {
+          openRoom(asRoomId(pending.roomId));
+        },
+      });
+    }
+
+    void sendLocalNotification({
+      title,
+      body,
+      data: { roomId: pending.roomId, type: "layout_import" },
+    });
+  }, [
+    sync.layoutImportPending,
+    userKey,
+    activeRoomId,
+    conversations,
+  ]);
+
   function push(screen: StackScreen) {
     setNav((prev) => ({ ...prev, stack: [...prev.stack, screen], sheetOpen: false }));
   }
 
   function pop() {
-    setNav((prev) => ({
-      ...prev,
-      stack: prev.stack.length > 1 ? prev.stack.slice(0, -1) : prev.stack,
-    }));
+    setNav((prev) => {
+      const current = prev.stack[prev.stack.length - 1];
+      // Leaving a room via back must put you to sleep immediately (don't wait on unmount).
+      if (current?.name === "room") {
+        sync.leaveRoom(String(current.roomId));
+      }
+      return {
+        ...prev,
+        stack: prev.stack.length > 1 ? prev.stack.slice(0, -1) : prev.stack,
+      };
+    });
   }
 
   function openRoom(roomId: RoomId, memberKeys?: DemoUserKey[]) {
@@ -359,13 +444,20 @@ export default function App() {
       });
       return;
     }
-    // Create/join on the server immediately so layout/chat don't race "room not found".
-    sync.joinRoom(String(roomId), members);
+    const current = nav.stack[nav.stack.length - 1];
+    if (
+      current?.name === "room" &&
+      String(current.roomId) !== String(roomId)
+    ) {
+      sync.leaveRoom(String(current.roomId));
+    }
+    // Join happens in RoomScreen mount (onJoin) — avoids a stuck "active" if we
+    // join here and then never mount, or race leave/rejoin with the effect.
     setNav((prev) => {
-      const current = prev.stack[prev.stack.length - 1];
+      const topScreen = prev.stack[prev.stack.length - 1];
       if (
-        current?.name === "room" &&
-        String(current.roomId) === String(roomId)
+        topScreen?.name === "room" &&
+        String(topScreen.roomId) === String(roomId)
       ) {
         return prev;
       }
@@ -672,8 +764,8 @@ export default function App() {
         ? `${groupLabel} group call`
         : `${invite.fromName} is calling`,
       body: isGroup
-        ? `${invite.fromName} started a Pixelroom group call`
-        : "Incoming Pixelroom call",
+        ? `${invite.fromName} started a Roomie group call`
+        : "Incoming Roomie call",
       data: { roomId: invite.roomId, type: "call" },
     });
 
@@ -937,10 +1029,8 @@ export default function App() {
             roomId: top.roomId,
           })
         }
-        onJoin={() =>
-          sync.joinRoom(String(top.roomId), convo?.memberKeys)
-        }
-        onLeave={() => sync.leaveRoom(String(top.roomId))}
+        onJoin={(id) => sync.joinRoom(String(id), convo?.memberKeys)}
+        onLeave={(id) => sync.leaveRoom(String(id))}
         onSendChat={(text) => {
           sync.sendChat(String(top.roomId), text);
           updateRoomActivity(top.roomId);
@@ -991,6 +1081,30 @@ export default function App() {
         onPublishLayout={(document) =>
           sync.sendRoomLayout(String(top.roomId), document)
         }
+        onProposeLayoutImport={(document) => {
+          sync.proposeLayoutImport(String(top.roomId), document);
+        }}
+        onVoteLayoutImport={(approve) =>
+          sync.voteLayoutImport(String(top.roomId), approve)
+        }
+        onCancelLayoutImport={() =>
+          sync.cancelLayoutImport(String(top.roomId))
+        }
+        layoutImportPending={sync.layoutImportPending}
+        layoutImportResolved={sync.layoutImportResolved}
+        onClearLayoutImportResolved={sync.clearLayoutImportResolved}
+        onProposeLayoutReset={() =>
+          sync.proposeLayoutReset(String(top.roomId))
+        }
+        onVoteLayoutReset={(approve) =>
+          sync.voteLayoutReset(String(top.roomId), approve)
+        }
+        onCancelLayoutReset={() =>
+          sync.cancelLayoutReset(String(top.roomId))
+        }
+        layoutResetPending={sync.layoutResetPending}
+        layoutResetResolved={sync.layoutResetResolved}
+        onClearLayoutResetResolved={sync.clearLayoutResetResolved}
         onMoveSelf={(x) => sync.sendPosition(String(top.roomId), x)}
         onTyping={(isTyping) => sync.sendTyping(String(top.roomId), isTyping)}
         peerTyping={(() => {
@@ -1125,6 +1239,7 @@ export default function App() {
                 }))
               }
               onOpenDevTools={() => push({ name: "devtools" })}
+              onSignOut={signOut}
             />
           ) : null}
           {nav.tab === "store" ? (

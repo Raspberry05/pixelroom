@@ -69,6 +69,10 @@ export const FURNITURE = {
   tvScreen1: require("../assets/interior/pieces/tv_screen_1.png") as number,
   tvScreen2: require("../assets/interior/pieces/tv_screen_2.png") as number,
   tvScreen3: require("../assets/interior/pieces/tv_screen_3.png") as number,
+  tvScreen4: require("../assets/interior/pieces/tv_screen_4.png") as number,
+  tvScreen5: require("../assets/interior/pieces/tv_screen_5.png") as number,
+  tvScreen6: require("../assets/interior/pieces/tv_screen_6.png") as number,
+  tvScreen7: require("../assets/interior/pieces/tv_screen_7.png") as number,
 } as const;
 
 export const FOOD = {

@@ -135,3 +135,11 @@ export function setUserQueryParam(userKey: DemoUserKey): void {
   url.searchParams.set("user", userKey);
   window.history.replaceState({}, "", url.toString());
 }
+
+/** Remove `?user=` so the next visit can show the sign-in wizard. */
+export function clearUserQueryParam(): void {
+  if (Platform.OS !== "web" || typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("user");
+  window.history.replaceState({}, "", url.toString());
+}

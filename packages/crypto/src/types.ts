@@ -1,5 +1,5 @@
 /**
- * Crypto interfaces for Pixelroom.
+ * Crypto interfaces for Roomie.
  *
  * Production will plug in Signal Protocol / MLS.
  * The local session below is for unit tests and early client wiring only.

@@ -9,6 +9,8 @@ import {
   View,
 } from "react-native";
 import {
+  DEFAULT_HOTSPOTS,
+  hotspotsWithFurnitureSeats,
   parseCommand,
   type ActionKind,
   type Appearance,
@@ -16,7 +18,9 @@ import {
   type RoomId,
   type RoomStyleId,
 } from "@pixelroom/core";
+import { seatOffsetsBySprite } from "../data/spriteOverrides";
 import { RoomPalette } from "../components/room/RoomPalette";
+import { LayoutImportModal } from "../components/room/LayoutImportModal";
 import { RoomStage } from "../components/room/RoomStage";
 import { TopNav } from "../components/TopNav";
 import { CallButton } from "../components/CallButton";
@@ -48,14 +52,24 @@ import { GROCERY_ITEMS } from "../data/groceryItems";
 import type { IngredientAmount, CookedDish } from "../data/recipes";
 import { getRequiredAppliance } from "../data/recipes";
 import {
+  applyLayoutImport,
+  applyLayoutReset,
+  type ExpansionImportHold,
+} from "../data/layoutImport";
+import type {
+  LayoutImportPending,
+  LayoutImportResolved,
+  LayoutResetPending,
+  LayoutResetResolved,
+} from "../sync/client";
+import {
   actionUnlockHint,
   furnitureSpritesInRoom,
   isActionUnlocked,
 } from "../data/actionUnlocks";
 import {
-  consumePlacedFromInventory,
-  createStarterInventory,
   inventoryIdForSprite,
+  inventoryIdForTile,
   getQty,
   refund,
   spend,
@@ -63,11 +77,15 @@ import {
 } from "../data/inventory";
 import {
   createDefaultRoomDocument,
+  expandCostForSide,
   expandRoomLeft,
   expandRoomRight,
+  FLOOR_DEPTH_CELLS,
   normalizeRoomDocument,
-  ROOM_EXPAND_COST,
+  shrinkRoomLeft,
+  shrinkRoomRight,
   type EditTool,
+  type ExpansionPurchase,
   type RoomDocument,
 } from "../data/roomLayout";
 import {
@@ -148,8 +166,8 @@ type Props = {
   onChangeCoins: (next: number) => void;
   onBack: () => void;
   onOpenProfile: () => void;
-  onJoin: () => void;
-  onLeave: () => void;
+  onJoin: (roomId: RoomId) => void;
+  onLeave: (roomId: RoomId) => void;
   onSendChat: (text: string) => void;
   onSendAction: (action: ActionKind, targetName?: string | null) => void;
   onStartCall?: () => void;
@@ -171,6 +189,21 @@ type Props = {
     fromUserKey?: DemoUserKey;
   } | null;
   onPublishLayout?: (document: RoomDocument) => void;
+  onProposeLayoutImport?: (
+    document: RoomDocument,
+    expansionHold?: ExpansionImportHold,
+  ) => void;
+  onVoteLayoutImport?: (approve: boolean) => void;
+  onCancelLayoutImport?: () => void;
+  layoutImportPending?: LayoutImportPending | null;
+  layoutImportResolved?: LayoutImportResolved | null;
+  onClearLayoutImportResolved?: () => void;
+  onProposeLayoutReset?: () => void;
+  onVoteLayoutReset?: (approve: boolean) => void;
+  onCancelLayoutReset?: () => void;
+  layoutResetPending?: LayoutResetPending | null;
+  layoutResetResolved?: LayoutResetResolved | null;
+  onClearLayoutResetResolved?: () => void;
   onMoveSelf?: (x: number) => void;
   onTyping?: (isTyping: boolean) => void;
   peerTyping?: { userKey: DemoUserKey; name: string } | null;
@@ -212,6 +245,18 @@ export function RoomScreen({
   styleId,
   syncedLayout = null,
   onPublishLayout,
+  onProposeLayoutImport,
+  onVoteLayoutImport,
+  onCancelLayoutImport,
+  layoutImportPending = null,
+  layoutImportResolved = null,
+  onClearLayoutImportResolved,
+  onProposeLayoutReset,
+  onVoteLayoutReset,
+  onCancelLayoutReset,
+  layoutResetPending = null,
+  layoutResetResolved = null,
+  onClearLayoutResetResolved,
   onMoveSelf,
   onTyping,
   peerTyping = null,
@@ -222,6 +267,7 @@ export function RoomScreen({
 }: Props) {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
+  const [showLayoutImport, setShowLayoutImport] = useState(false);
   const [tool, setTool] = useState<EditTool>({ kind: "move" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [document, setDocument] = useState<RoomDocument>(() => loadDocument(roomId));
@@ -238,6 +284,12 @@ export function RoomScreen({
     (selfKey === "alice" ? "bob" : "alice");
   const appliedRevRef = useRef(0);
   const ignorePublishRef = useRef(false);
+  /** Layout at propose/pending time — refunds still work if sync clears the room first. */
+  const resetSnapshotRef = useRef<RoomDocument | null>(null);
+  /** Expansion coins held while a dual-consent import awaits approval. */
+  const importExpansionHoldRef = useRef<ExpansionImportHold | null>(null);
+  const coinsRef = useRef(coins);
+  coinsRef.current = coins;
   const publishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seededServerRef = useRef(false);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -245,8 +297,6 @@ export function RoomScreen({
   const [visibleUserKeys, setVisibleUserKeys] = useState<string[]>([]);
   const [bodyVisibleUserKeys, setBodyVisibleUserKeys] = useState<string[]>([]);
   const [hudNow, setHudNow] = useState(() => Date.now());
-  const coinsRef = useRef(coins);
-  coinsRef.current = coins;
   const lastSpeakAtRef = useRef(0);
 
   // Users whose in-world head-chat is fully readable (HUD should hide for them).
@@ -362,11 +412,147 @@ export function RoomScreen({
     });
   }, [syncedLayout, selfKey]);
 
+  function refundImportExpansionHold() {
+    const hold = importExpansionHoldRef.current;
+    importExpansionHoldRef.current = null;
+    if (!hold || hold.cost <= 0) return;
+    onChangeCoins(coinsRef.current + hold.cost);
+  }
+
+  // Dual-consent layout import finished.
+  useEffect(() => {
+    if (!layoutImportResolved) return;
+    if (layoutImportResolved.roomId !== String(roomId)) {
+      onClearLayoutImportResolved?.();
+      return;
+    }
+    if (layoutImportResolved.status === "applied" && layoutImportResolved.document) {
+      const incoming = normalizeRoomDocument(layoutImportResolved.document);
+      if (layoutImportResolved.fromUserKey === selfKey) {
+        const hold = importExpansionHoldRef.current;
+        importExpansionHoldRef.current = null;
+        // Proposer spends inventory now that everyone approved; held expansion
+        // coins were already deducted and commit into expansionPurchases.
+        const result = applyLayoutImport(inventory, document, incoming, {
+          expansionHold: hold ?? undefined,
+        });
+        ignorePublishRef.current = true;
+        if ("error" in result) {
+          if (hold && hold.cost > 0) {
+            onChangeCoins(coinsRef.current + hold.cost);
+          }
+          setStatus(result.error);
+          setDocument(incoming);
+        } else {
+          onChangeInventory(result.inventory);
+          setDocument(result.document);
+          setStatus(
+            hold && hold.cost > 0
+              ? `Layout imported (−${hold.cost}c expansions, room approved)`
+              : "Layout imported (room approved)",
+          );
+        }
+        queueMicrotask(() => {
+          ignorePublishRef.current = false;
+        });
+      } else {
+        ignorePublishRef.current = true;
+        setDocument(incoming);
+        setStatus(
+          `${DEMO_USERS[layoutImportResolved.fromUserKey]?.character.displayName ?? "Peer"}'s layout import was approved`,
+        );
+        queueMicrotask(() => {
+          ignorePublishRef.current = false;
+        });
+      }
+      setShowLayoutImport(false);
+    } else if (layoutImportResolved.status === "declined") {
+      if (layoutImportResolved.fromUserKey === selfKey) {
+        refundImportExpansionHold();
+      }
+      const by = layoutImportResolved.byUserKey
+        ? DEMO_USERS[layoutImportResolved.byUserKey]?.character.displayName
+        : "Someone";
+      setStatus(`${by ?? "Someone"} declined the layout import`);
+    } else if (layoutImportResolved.status === "cancelled") {
+      if (layoutImportResolved.fromUserKey === selfKey) {
+        refundImportExpansionHold();
+      }
+      setStatus("Layout import cancelled");
+    }
+    onClearLayoutImportResolved?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on resolved event
+  }, [layoutImportResolved]);
+
+  // Capture room state while a reset vote is open (before sync clears layout).
+  useEffect(() => {
+    if (layoutResetPending) {
+      if (!resetSnapshotRef.current) {
+        resetSnapshotRef.current = document;
+      }
+      return;
+    }
+    if (!layoutResetResolved) {
+      resetSnapshotRef.current = null;
+    }
+  }, [layoutResetPending, layoutResetResolved, document]);
+
+  // Dual-consent layout reset finished.
+  useEffect(() => {
+    if (!layoutResetResolved) return;
+    if (layoutResetResolved.roomId !== String(roomId)) {
+      onClearLayoutResetResolved?.();
+      return;
+    }
+    if (layoutResetResolved.status === "applied") {
+      const fresh = isTestLabRoom(roomId)
+        ? createTestLabRoomDocument()
+        : createDefaultRoomDocument();
+      const prior = resetSnapshotRef.current ?? document;
+      resetSnapshotRef.current = null;
+      const result = applyLayoutReset(
+        inventory,
+        coins,
+        prior,
+        fresh,
+        selfKey,
+        { isProposer: layoutResetResolved.fromUserKey === selfKey },
+      );
+      ignorePublishRef.current = true;
+      onChangeInventory(result.inventory);
+      onChangeCoins(result.coins);
+      setDocument(result.document);
+      setSelectedId(null);
+      setTool({ kind: "move" });
+      setStatus(
+        result.expansionRefund > 0
+          ? `Room reset (+${result.expansionRefund}c expansions refunded)`
+          : "Room reset (room approved)",
+      );
+      queueMicrotask(() => {
+        ignorePublishRef.current = false;
+      });
+    } else if (layoutResetResolved.status === "declined") {
+      resetSnapshotRef.current = null;
+      const by = layoutResetResolved.byUserKey
+        ? DEMO_USERS[layoutResetResolved.byUserKey]?.character.displayName
+        : "Someone";
+      setStatus(`${by ?? "Someone"} declined the room reset`);
+    } else if (layoutResetResolved.status === "cancelled") {
+      resetSnapshotRef.current = null;
+      setStatus("Room reset cancelled");
+    }
+    onClearLayoutResetResolved?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on resolved event
+  }, [layoutResetResolved]);
+
   // Persist locally + broadcast to the other member (debounced for paint storms).
   useEffect(() => {
     saveDocument(roomId, document);
     setSavedAt(Date.now());
     if (!onPublishLayout || ignorePublishRef.current) return;
+    // Don't fight a dual-consent import/reset with live edit publishes.
+    if (layoutImportPending || layoutResetPending) return;
     if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
     publishTimerRef.current = setTimeout(() => {
       onPublishLayout(document);
@@ -374,7 +560,7 @@ export function RoomScreen({
     return () => {
       if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
     };
-  }, [roomId, document, onPublishLayout]);
+  }, [roomId, document, onPublishLayout, layoutImportPending, layoutResetPending]);
 
   // If the server has no layout yet, seed it from this client's cache once.
   useEffect(() => {
@@ -397,9 +583,10 @@ export function RoomScreen({
   }, [onPublishLayout, syncedLayout, document]);
 
   useEffect(() => {
-    onJoin();
-    return () => onLeave();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const id = roomId;
+    onJoin(id);
+    return () => onLeave(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- join/leave tied to room identity only
   }, [roomId]);
 
   useEffect(() => {
@@ -455,6 +642,27 @@ export function RoomScreen({
 
   const activeCount = Object.values(room.memberState).filter((m) => m.presence === "active")
     .length;
+
+  /** Prefer DevTools sit offsets locally when rebuilding chair hotspots. */
+  const roomForPlay = useMemo((): Room => {
+    const offsets = seatOffsetsBySprite();
+    if (Object.keys(offsets).length === 0) return room;
+    return {
+      ...room,
+      hotspots: hotspotsWithFurnitureSeats(
+        DEFAULT_HOTSPOTS,
+        document.furniture.map((f) => ({
+          id: f.id,
+          sprite: f.sprite,
+          gx: f.gx,
+          gy: f.gy,
+          packed: f.packed,
+        })),
+        FLOOR_DEPTH_CELLS,
+        offsets,
+      ),
+    };
+  }, [room, document.furniture]);
 
   const isOnCall = callState === "calling" || callState === "ringing" || callState === "connected";
   
@@ -548,30 +756,17 @@ export function RoomScreen({
       return;
     }
 
-    // Social: only walk over when the target is on your screen. Never teleport
-    // to someone off-camera; their client walks to you when they can see you.
+    // Social: never teleport across the room to talk. Closing the gap happens
+    // only while the peer stays body-visible and self stays in the camera
+    // comfort band (RoomStage). Off-screen targets get a face/action only.
     const chip = ACTION_CHIPS.find((c) => c.action === action);
-    if (chip?.needsTarget && targetName && onMoveSelf) {
+    if (chip?.needsTarget && targetName) {
       const targetActor = actors.find(
         (a) =>
           !a.isSelf &&
           a.name.toLowerCase() === targetName.trim().toLowerCase(),
       );
-      if (targetActor && bodyVisibleSet.has(targetActor.userKey)) {
-        const selfActor = actors.find((a) => a.isSelf);
-        const selfMember = selfActor
-          ? room.memberState[String(selfActor.characterId)]
-          : null;
-        const targetMember =
-          room.memberState[String(targetActor.characterId)] ?? null;
-        if (selfMember && targetMember) {
-          const gap = targetMember.position.x - selfMember.position.x;
-          if (Math.abs(gap) > 1.15) {
-            const side = gap >= 0 ? -1 : 1;
-            onMoveSelf(targetMember.position.x + side * 1.1);
-          }
-        }
-      } else if (targetActor && !bodyVisibleSet.has(targetActor.userKey)) {
+      if (targetActor && !bodyVisibleSet.has(targetActor.userKey)) {
         setStatus(`${targetActor.name} isn’t on your screen`);
         setTimeout(() => setStatus(null), 2200);
         onSendAction(action, targetName);
@@ -625,20 +820,55 @@ export function RoomScreen({
     }
   }
 
-  function resetLayout() {
+  function applyLocalReset() {
     const fresh = isTestLabRoom(roomId)
       ? createTestLabRoomDocument()
       : createDefaultRoomDocument();
-    setDocument(fresh);
-    onChangeInventory(consumePlacedFromInventory(createStarterInventory(), [], 1));
+    const result = applyLayoutReset(
+      inventory,
+      coins,
+      document,
+      fresh,
+      selfKey,
+      { isProposer: true },
+    );
+    ignorePublishRef.current = true;
+    onChangeInventory(result.inventory);
+    onChangeCoins(result.coins);
+    setDocument(result.document);
     setSelectedId(null);
     setTool({ kind: "move" });
-    setStatus(null);
+    setStatus(
+      result.expansionRefund > 0
+        ? `Room reset (+${result.expansionRefund}c expansions refunded)`
+        : "Room reset",
+    );
+    queueMicrotask(() => {
+      ignorePublishRef.current = false;
+    });
+  }
+
+  function resetLayout() {
+    const members = memberKeys?.length ?? 0;
+    if (onProposeLayoutReset && members >= 2) {
+      if (layoutImportPending || layoutResetPending) {
+        setStatus("Finish or cancel the pending layout change first");
+        return;
+      }
+      resetSnapshotRef.current = document;
+      onProposeLayoutReset();
+      setStatus("Reset proposed — waiting for everyone to approve");
+      return;
+    }
+    applyLocalReset();
   }
 
   function requestExpand(side: "left" | "right") {
-    if (coins < ROOM_EXPAND_COST) {
-      setStatus(`Need ${ROOM_EXPAND_COST}c to expand (have ${coins}c)`);
+    const already =
+      side === "left" ? document.expansionsLeft : document.expansionsRight;
+    const cost = expandCostForSide(already);
+    if (coins < cost) {
+      setStatus(`Need ${cost}c to expand (have ${coins}c)`);
       return;
     }
     const next =
@@ -650,9 +880,63 @@ export function RoomScreen({
       setStatus("Max expansions on that side");
       return;
     }
-    onChangeCoins(coins - ROOM_EXPAND_COST);
-    setDocument(next);
-    setStatus(`Expanded ${side} (−${ROOM_EXPAND_COST}c)`);
+    const purchase: ExpansionPurchase = {
+      side,
+      index: already,
+      cost,
+      byUserKey: selfKey,
+    };
+    onChangeCoins(coins - cost);
+    setDocument({
+      ...next,
+      expansionPurchases: [...(document.expansionPurchases ?? []), purchase],
+    });
+    setStatus(`Expanded ${side} (−${cost}c)`);
+  }
+
+  function requestShrink(side: "left" | "right") {
+    const result =
+      side === "left" ? shrinkRoomLeft(document) : shrinkRoomRight(document);
+    if (!result) {
+      setStatus(`No ${side} expansion to refund`);
+      return;
+    }
+    let nextInv = inventory;
+    for (const piece of result.removedFurniture) {
+      const invId = inventoryIdForSprite(piece.sprite);
+      if (invId) nextInv = refund(nextInv, invId);
+    }
+    for (const _win of result.removedWindows) {
+      nextInv = refund(nextInv, "window_basic");
+    }
+    if (result.removedFloorTiles > 0) {
+      nextInv = refund(
+        nextInv,
+        inventoryIdForTile("floor"),
+        result.removedFloorTiles,
+      );
+    }
+    if (result.removedWallTiles > 0) {
+      nextInv = refund(
+        nextInv,
+        inventoryIdForTile("wall"),
+        result.removedWallTiles,
+      );
+    }
+    onChangeInventory(nextInv);
+    onChangeCoins(coins + result.refundCoins);
+    setDocument(result.document);
+    setSelectedId(null);
+    const n =
+      result.removedFurniture.length +
+      result.removedWindows.length +
+      result.removedFloorTiles +
+      result.removedWallTiles;
+    setStatus(
+      n > 0
+        ? `Refunded ${side} expansion (+${result.refundCoins}c) · ${n} items back to inventory`
+        : `Refunded ${side} expansion (+${result.refundCoins}c)`,
+    );
   }
 
   function handleIngredientsSelected(ingredients: IngredientAmount[]) {
@@ -783,7 +1067,7 @@ export function RoomScreen({
 
       <View style={styles.stageWrap}>
         <RoomStage
-          room={room}
+          room={roomForPlay}
           actors={actors}
           bubblesByUserKey={bubblesByUserKey}
           styleId={styleId}
@@ -797,7 +1081,7 @@ export function RoomScreen({
           selectedId={selectedId}
           onSelectId={setSelectedId}
           onRequestExpand={requestExpand}
-          expandCost={ROOM_EXPAND_COST}
+          onRequestShrink={requestShrink}
           onViewportCenterX={onMoveSelf}
           onVisibleUserKeys={setVisibleUserKeys}
           onBodyVisibleUserKeys={setBodyVisibleUserKeys}
@@ -874,6 +1158,7 @@ export function RoomScreen({
             status={status}
             onDeleteSelected={deleteSelected}
             onResetLayout={resetLayout}
+            onImportLayout={() => setShowLayoutImport(true)}
             onToggleFloorFill={() => {
               setDocument((prev) => ({
                 ...prev,
@@ -882,103 +1167,225 @@ export function RoomScreen({
               }));
             }}
           />
-        ) : isOnCall &&
-          isSpeakerOn &&
-          activeCall &&
-          onEndCall &&
-          onToggleMute &&
-          onToggleSpeaker ? (
-          <CallControls
-            duration={callDuration}
-            callerName={activeCall.callerName}
-            isMuted={isMuted}
-            isSpeakerOn={isSpeakerOn}
-            micLevel={micLevel}
-            hasRemoteAudio={hasRemoteAudio}
-            onToggleMute={onToggleMute}
-            onToggleSpeaker={onToggleSpeaker}
-            onEndCall={onEndCall}
-          />
         ) : (
-          <View style={styles.hud}>
-            {needsCleaning && !editing ? (
-              <View style={styles.cleaningAlert}>
-                <Text style={styles.cleaningAlertText}>
-                  🧹 Room is dirty! Use *clean to tidy up
-                </Text>
-              </View>
-            ) : null}
-            {!editing && plantNeedsWater(furnitureCare) ? (
-              <View style={styles.cleaningAlert}>
-                <Text style={styles.cleaningAlertText}>
-                  💧 Plant is thirsty! Use *water plant
-                </Text>
-              </View>
-            ) : null}
-            {!editing && tvHasStatic(furnitureCare) ? (
-              <View style={styles.cleaningAlert}>
-                <Text style={styles.cleaningAlertText}>
-                  📡 TV has static! Use *watch tv
-                </Text>
-              </View>
-            ) : null}
-            {!editing && bedIsMessy(furnitureCare) ? (
-              <View style={styles.cleaningAlert}>
-                <Text style={styles.cleaningAlertText}>
-                  🛏️ Bed is messy! Use *make bed
-                </Text>
-              </View>
-            ) : null}
-            {status ? <Text style={styles.statusHint}>{status}</Text> : null}
-            <ScrollView
-              horizontal
-              style={styles.chips}
-              contentContainerStyle={styles.chipsContent}
-              showsHorizontalScrollIndicator={false}
-            >
-              {ACTION_CHIPS.map((chip) => {
-                const unlocked = isActionUnlocked(chip.action, placedSprites);
-                return (
-                  <Pressable
-                    key={chip.label}
-                    style={[styles.chip, !unlocked && styles.chipLocked]}
-                    onPress={() =>
-                      trySendAction(
-                        chip.action,
-                        chip.needsTarget
-                          ? DEMO_USERS[peerKey].character.displayName
-                          : null,
-                      )
-                    }
-                    accessibilityState={{ disabled: !unlocked }}
-                  >
-                    <Text
-                      style={[styles.chipText, !unlocked && styles.chipTextLocked]}
-                    >
-                      {chip.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            <View style={styles.composer}>
-              <TextInput
-                style={styles.input}
-                value={draft}
-                onChangeText={setDraftAndTyping}
-                placeholder="Message or *hug Bob"
-                placeholderTextColor={colors.inkFaint}
-                onSubmitEditing={submit}
-                returnKeyType="send"
+          <View>
+            {isOnCall &&
+            isSpeakerOn &&
+            activeCall &&
+            onEndCall &&
+            onToggleMute &&
+            onToggleSpeaker ? (
+              <CallControls
+                duration={callDuration}
+                callerName={activeCall.callerName}
+                isMuted={isMuted}
+                isSpeakerOn={isSpeakerOn}
+                micLevel={micLevel}
+                hasRemoteAudio={hasRemoteAudio}
+                onToggleMute={onToggleMute}
+                onToggleSpeaker={onToggleSpeaker}
+                onEndCall={onEndCall}
               />
-              <Pressable style={styles.send} onPress={submit}>
-                <Text style={styles.sendText}>Send</Text>
-              </Pressable>
+            ) : null}
+            <View style={styles.hud}>
+              {needsCleaning ? (
+                <View style={styles.cleaningAlert}>
+                  <Text style={styles.cleaningAlertText}>
+                    🧹 Room is dirty! Use *clean to tidy up
+                  </Text>
+                </View>
+              ) : null}
+              {plantNeedsWater(furnitureCare) ? (
+                <View style={styles.cleaningAlert}>
+                  <Text style={styles.cleaningAlertText}>
+                    💧 Plant is thirsty! Use *water plant
+                  </Text>
+                </View>
+              ) : null}
+              {tvHasStatic(furnitureCare) ? (
+                <View style={styles.cleaningAlert}>
+                  <Text style={styles.cleaningAlertText}>
+                    📡 TV has static! Use *watch tv
+                  </Text>
+                </View>
+              ) : null}
+              {bedIsMessy(furnitureCare) ? (
+                <View style={styles.cleaningAlert}>
+                  <Text style={styles.cleaningAlertText}>
+                    🛏️ Bed is messy! Use *make bed
+                  </Text>
+                </View>
+              ) : null}
+              {status ? <Text style={styles.statusHint}>{status}</Text> : null}
+              <ScrollView
+                horizontal
+                style={styles.chips}
+                contentContainerStyle={styles.chipsContent}
+                showsHorizontalScrollIndicator={false}
+              >
+                {ACTION_CHIPS.map((chip) => {
+                  const unlocked = isActionUnlocked(chip.action, placedSprites);
+                  return (
+                    <Pressable
+                      key={chip.label}
+                      style={[styles.chip, !unlocked && styles.chipLocked]}
+                      onPress={() =>
+                        trySendAction(
+                          chip.action,
+                          chip.needsTarget
+                            ? DEMO_USERS[peerKey].character.displayName
+                            : null,
+                        )
+                      }
+                      accessibilityState={{ disabled: !unlocked }}
+                    >
+                      <Text
+                        style={[
+                          styles.chipText,
+                          !unlocked && styles.chipTextLocked,
+                        ]}
+                      >
+                        {chip.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+
+              <View style={styles.composer}>
+                <TextInput
+                  style={styles.input}
+                  value={draft}
+                  onChangeText={setDraftAndTyping}
+                  placeholder="Message or *hug Bob"
+                  placeholderTextColor={colors.inkFaint}
+                  onSubmitEditing={submit}
+                  returnKeyType="send"
+                />
+                <Pressable style={styles.send} onPress={submit}>
+                  <Text style={styles.sendText}>Send</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
         )}
       </View>
+
+      <LayoutImportModal
+        visible={showLayoutImport}
+        roomDocument={document}
+        inventory={inventory}
+        coins={coins}
+        buyerKey={selfKey}
+        onChangeDocument={setDocument}
+        onChangeInventory={onChangeInventory}
+        onChangeCoins={onChangeCoins}
+        onClose={() => setShowLayoutImport(false)}
+        onStatus={setStatus}
+        onProposeImport={
+          onProposeLayoutImport
+            ? (doc, hold) => {
+                importExpansionHoldRef.current = hold ?? null;
+                onProposeLayoutImport(doc, hold);
+              }
+            : undefined
+        }
+        awaitingApprovals={
+          layoutImportPending != null &&
+          layoutImportPending.fromUserKey === selfKey
+        }
+        onCancelProposal={() => {
+          refundImportExpansionHold();
+          onCancelLayoutImport?.();
+        }}
+      />
+
+      {layoutImportPending &&
+      layoutImportPending.fromUserKey !== selfKey &&
+      onVoteLayoutImport ? (
+        <View style={styles.importConsent}>
+          <Text style={styles.importConsentTitle}>
+            {DEMO_USERS[layoutImportPending.fromUserKey]?.character.displayName ??
+              "Peer"}{" "}
+            wants to import a layout
+          </Text>
+          <Text style={styles.importConsentMeta}>
+            {layoutImportPending.document.furniture?.length ?? 0} furniture · L
+            {layoutImportPending.document.expansionsLeft ?? 0}/R
+            {layoutImportPending.document.expansionsRight ?? 0} · Approvals{" "}
+            {layoutImportPending.approvals.length}/
+            {layoutImportPending.required.length}
+          </Text>
+          <View style={styles.importConsentActions}>
+            <Pressable
+              style={styles.importDeclineBtn}
+              onPress={() => onVoteLayoutImport(false)}
+            >
+              <Text style={styles.importDeclineText}>Decline</Text>
+            </Pressable>
+            <Pressable
+              style={styles.importApproveBtn}
+              onPress={() => onVoteLayoutImport(true)}
+            >
+              <Text style={styles.importApproveText}>Approve</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {layoutResetPending &&
+      layoutResetPending.fromUserKey === selfKey &&
+      onCancelLayoutReset ? (
+        <View style={styles.importConsent}>
+          <Text style={styles.importConsentTitle}>
+            Waiting for room to approve reset
+          </Text>
+          <Text style={styles.importConsentMeta}>
+            Placed furniture returns to inventory · Bought wall spaces refund
+            coins · Approvals {layoutResetPending.approvals.length}/
+            {layoutResetPending.required.length}
+          </Text>
+          <View style={styles.importConsentActions}>
+            <Pressable
+              style={styles.importDeclineBtn}
+              onPress={() => onCancelLayoutReset()}
+            >
+              <Text style={styles.importDeclineText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {layoutResetPending &&
+      layoutResetPending.fromUserKey !== selfKey &&
+      onVoteLayoutReset ? (
+        <View style={styles.importConsent}>
+          <Text style={styles.importConsentTitle}>
+            {DEMO_USERS[layoutResetPending.fromUserKey]?.character.displayName ??
+              "Peer"}{" "}
+            wants to reset the room
+          </Text>
+          <Text style={styles.importConsentMeta}>
+            Clears layout · Refunds expansions · Approvals{" "}
+            {layoutResetPending.approvals.length}/
+            {layoutResetPending.required.length}
+          </Text>
+          <View style={styles.importConsentActions}>
+            <Pressable
+              style={styles.importDeclineBtn}
+              onPress={() => onVoteLayoutReset(false)}
+            >
+              <Text style={styles.importDeclineText}>Decline</Text>
+            </Pressable>
+            <Pressable
+              style={styles.importApproveBtn}
+              onPress={() => onVoteLayoutReset(true)}
+            >
+              <Text style={styles.importApproveText}>Approve</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {/* Ingredient selector */}
       <IngredientSelector
@@ -1228,4 +1635,63 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendText: { color: colors.surfaceRaised, fontWeight: "700" },
+  importConsent: {
+    position: "absolute",
+    left: space.md,
+    right: space.md,
+    top: 72,
+    zIndex: 40,
+    backgroundColor: colors.surface,
+    borderWidth: 3,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.xl,
+    padding: space.md,
+    gap: space.sm,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  importConsentTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.ink,
+  },
+  importConsentMeta: {
+    fontSize: 12,
+    color: colors.inkMuted,
+  },
+  importConsentActions: {
+    flexDirection: "row",
+    gap: space.sm,
+  },
+  importDeclineBtn: {
+    flex: 1,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radii.pill,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingVertical: space.sm,
+    alignItems: "center",
+  },
+  importDeclineText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.ink,
+  },
+  importApproveBtn: {
+    flex: 1,
+    backgroundColor: colors.accent,
+    borderRadius: radii.pill,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    paddingVertical: space.sm,
+    alignItems: "center",
+  },
+  importApproveText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.surfaceRaised,
+  },
 });

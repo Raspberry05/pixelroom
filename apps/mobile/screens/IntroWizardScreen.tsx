@@ -272,7 +272,7 @@ export function IntroWizardScreen({ onComplete }: Props) {
               disabled={!displayName.trim()}
               accessibilityRole="button"
             >
-              <Text style={styles.primaryText}>Enter Pixelroom</Text>
+              <Text style={styles.primaryText}>Enter Roomie</Text>
             </Pressable>
           </View>
         ) : null}
@@ -284,9 +284,9 @@ export function IntroWizardScreen({ onComplete }: Props) {
 function WelcomeStep({ onContinue }: { onContinue: () => void }) {
   return (
     <View style={styles.welcome}>
-      <Text style={styles.brand}>Pixelroom</Text>
+      <Text style={styles.brand}>Roomie</Text>
       <Text style={styles.welcomeLine}>
-        Encrypted rooms and voice with the people you already know.
+        A cozy place to hang with family and friends — encrypted chat, voice, and shared rooms.
       </Text>
       <Pressable
         style={styles.primary}

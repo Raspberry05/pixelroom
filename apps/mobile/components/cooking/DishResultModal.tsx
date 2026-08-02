@@ -1,7 +1,10 @@
 import { Modal, Pressable, StyleSheet, Text, View, Animated } from "react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { colors, radii, space, typography } from "../../theme";
 import type { CookedDish } from "../../data/recipes";
+import { dishForRecipe } from "../../data/catalogExtras";
+import { RecipeBookModal } from "./RecipeBookModal";
+import { CatalogCropThumb } from "../devtools/CatalogAtlasSection";
 
 type Props = {
   visible: boolean;
@@ -11,6 +14,7 @@ type Props = {
 
 export function DishResultModal({ visible, dish, onClose }: Props) {
   const [scaleAnim] = useState(new Animated.Value(0));
+  const [recipeBookOpen, setRecipeBookOpen] = useState(false);
   const [sparkles] = useState(
     Array.from({ length: 8 }, () => ({
       rotate: new Animated.Value(0),
@@ -56,6 +60,11 @@ export function DishResultModal({ visible, dish, onClose }: Props) {
     }
   }, [visible, dish]);
 
+  const dishArt = useMemo(
+    () => (dish ? dishForRecipe(dish.recipeId) : null),
+    [dish?.recipeId],
+  );
+
   if (!dish) return null;
 
   const qualityText =
@@ -73,6 +82,7 @@ export function DishResultModal({ visible, dish, onClose }: Props) {
         : "#8B7355";
 
   return (
+    <>
     <Modal visible={visible} transparent animationType="fade">
       <View style={styles.overlay}>
         <View style={styles.container}>
@@ -108,16 +118,19 @@ export function DishResultModal({ visible, dish, onClose }: Props) {
                 );
               })}
 
-            <Animated.Text
-              style={[
-                styles.dishEmoji,
-                {
-                  transform: [{ scale: scaleAnim }],
-                },
-              ]}
+            <Animated.View
+              style={{
+                transform: [{ scale: scaleAnim }],
+              }}
             >
-              {dish.emoji}
-            </Animated.Text>
+              <CatalogCropThumb
+                crop={dishArt ?? undefined}
+                size={72}
+                fallback={
+                  <Text style={styles.dishEmoji}>{dish.emoji}</Text>
+                }
+              />
+            </Animated.View>
           </View>
 
           <Text style={styles.dishName}>{dish.name}</Text>
@@ -128,9 +141,11 @@ export function DishResultModal({ visible, dish, onClose }: Props) {
           </View>
 
           {dish.quality === "mystery" && (
-            <Text style={styles.mysteryHint}>
-              💡 Try following known recipes for better results!
-            </Text>
+            <Pressable onPress={() => setRecipeBookOpen(true)}>
+              <Text style={styles.mysteryHint}>
+                💡 Open the recipe book for known dishes
+              </Text>
+            </Pressable>
           )}
 
           <Pressable style={styles.closeBtn} onPress={onClose}>
@@ -139,6 +154,12 @@ export function DishResultModal({ visible, dish, onClose }: Props) {
         </View>
       </View>
     </Modal>
+
+    <RecipeBookModal
+      visible={recipeBookOpen}
+      onClose={() => setRecipeBookOpen(false)}
+    />
+    </>
   );
 }
 
