@@ -11,4 +11,18 @@ export {
   utf8Encode,
   utf8Decode,
 } from "./types.js";
-export { LocalCryptoProvider, createLocalCryptoProvider } from "./local-provider.js";
+export {
+  LocalCryptoProvider,
+  InsecureLocalCryptoProvider,
+  createLocalCryptoProvider,
+  createInsecureLocalCryptoProvider,
+} from "./local-provider.js";
+export {
+  NaclCryptoProvider,
+  createNaclCryptoProvider,
+  keyPairFromSeed,
+  identityFromSeed,
+  derivePartyRoomKey,
+  secretboxEncrypt,
+  secretboxDecrypt,
+} from "./nacl-provider.js";

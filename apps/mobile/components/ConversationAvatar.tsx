@@ -6,21 +6,17 @@ import { colors, radii } from "../theme";
 type FaceProps = {
   appearance: Appearance;
   size?: number;
-  /** Ring border (group stack uses thin rings). */
-  bordered?: boolean;
 };
 
 /**
- * Circular crop zoomed onto the character's head/upper body.
- * Sprite frames include empty padding above the head — we scale up and clip.
+ * Snapchat-style PFP: square, no background, head + shoulders only
+ * (full sprite zoomed and clipped at the torso).
  */
-export function CharacterFace({
-  appearance,
-  size = 48,
-  bordered = true,
-}: FaceProps) {
-  const spriteSize = Math.round(size * 2.05);
-  const offsetY = -Math.round(size * 0.12);
+export function CharacterFace({ appearance, size = 48 }: FaceProps) {
+  const zoom = 2.0;
+  const spriteSize = Math.round(size * zoom);
+  const headCenterRatio = 0.5;
+  const offsetY = Math.round(size * 0.42 - spriteSize * headCenterRatio);
   const offsetX = -Math.round((spriteSize - size) / 2);
 
   return (
@@ -30,37 +26,47 @@ export function CharacterFace({
         {
           width: size,
           height: size,
-          borderRadius: size / 2,
-          borderWidth: bordered ? 2 : 0,
         },
       ]}
+      accessibilityRole="image"
     >
-      <View style={{ marginTop: offsetY, marginLeft: offsetX }}>
-        <AvatarPreview appearance={appearance} size={spriteSize} />
+      <View
+        style={{
+          width: spriteSize,
+          height: spriteSize,
+          transform: [{ translateY: offsetY }, { translateX: offsetX }],
+        }}
+      >
+        <AvatarPreview appearance={appearance} size={spriteSize} exactSize />
       </View>
     </View>
   );
 }
 
 type ConversationAvatarProps = {
-  /** 1 for DM; up to 3 shown for parties (extras implied by +N). */
+  /** Peers only — caller should exclude self. */
   appearances: Appearance[];
   size?: number;
 };
 
 /**
- * Hallway row avatar: single face for DMs, overlapped stack for parties.
+ * Hallway row avatar:
+ * - DM: single peer face
+ * - Party: up to 3 peers in a `<` / zigzag stack (never self)
+ *
+ *   ....char3  (back, mid X, faded)
+ * char2        (mid z, left, faded)
+ * .......char1 (front, right, solid)
  */
 export function ConversationAvatar({
   appearances,
-  size = 48,
+  size = 56,
 }: ConversationAvatarProps) {
   const faces = appearances.slice(0, 3);
-  const extra = Math.max(0, appearances.length - 3);
 
   if (faces.length === 0) {
     return (
-      <View style={[styles.fallback, { width: size, height: size, borderRadius: size / 2 }]}>
+      <View style={[styles.fallback, { width: size, height: size }]}>
         <Text style={styles.fallbackText}>?</Text>
       </View>
     );
@@ -70,46 +76,121 @@ export function ConversationAvatar({
     return <CharacterFace appearance={faces[0]!} size={size} />;
   }
 
-  // Overlapped stack — front face largest, others tucked behind/beside.
-  const faceSize = Math.round(size * 0.72);
-  const step = Math.round(size * 0.28);
+  const frontSize = Math.round(size * 0.72);
+  const midSize = Math.round(size * 0.68);
+  const backSize = Math.round(size * 0.64);
 
-  return (
-    <View style={{ width: size, height: size }}>
-      {faces.map((appearance, index) => {
-        const fromBack = faces.length - 1 - index;
-        const left = fromBack * step;
-        const top = fromBack * Math.round(step * 0.35);
-        return (
-          <View
-            key={index}
-            style={[
-              styles.stackSlot,
-              {
-                left,
-                top,
-                zIndex: index + 1,
-              },
-            ]}
-          >
-            <CharacterFace appearance={appearance} size={faceSize} />
-          </View>
-        );
-      })}
-      {extra > 0 ? (
+  // char1 front-right (solid), char2 left, char3 mid-X between the two (farther back).
+  const char1Left = size - frontSize;
+  const char1Top = Math.round(size - frontSize - size * 0.02);
+  const char2Left = 0;
+  const char2Top = Math.round((size - midSize) * 0.45);
+  // Center between the two front faces' centers, then nudge right so it reads as middle.
+  const char2Center = char2Left + midSize / 2;
+  const char1Center = char1Left + frontSize / 2;
+  const char3Left = Math.max(
+    0,
+    Math.min(
+      size - backSize,
+      Math.round((char2Center + char1Center) / 2 - backSize / 2 + size * 0.16),
+    ),
+  );
+  const char3Top = Math.round(size * 0.06);
+
+  if (faces.length === 2) {
+    return (
+      <View style={{ width: size, height: size }}>
         <View
           style={[
-            styles.extraBadge,
+            styles.stackSlot,
             {
-              width: Math.round(faceSize * 0.55),
-              height: Math.round(faceSize * 0.55),
-              borderRadius: radii.circle,
+              left: char2Left,
+              top: char2Top,
+              zIndex: 1,
             },
           ]}
         >
-          <Text style={styles.extraText}>+{extra}</Text>
+          <TintedFace appearance={faces[1]!} size={midSize} strength="soft" />
         </View>
-      ) : null}
+        <View
+          style={[
+            styles.stackSlot,
+            {
+              left: char1Left,
+              top: char1Top,
+              zIndex: 2,
+            },
+          ]}
+        >
+          <CharacterFace appearance={faces[0]!} size={frontSize} />
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ width: size, height: size }}>
+      {/* char3 — farthest back, X between char2 and char1 */}
+      <View
+        style={[
+          styles.stackSlot,
+          {
+            left: char3Left,
+            top: char3Top,
+            zIndex: 1,
+          },
+        ]}
+      >
+        <TintedFace appearance={faces[2]!} size={backSize} strength="strong" />
+      </View>
+      {/* char2 — left, mid depth */}
+      <View
+        style={[
+          styles.stackSlot,
+          {
+            left: char2Left,
+            top: char2Top,
+            zIndex: 2,
+          },
+        ]}
+      >
+        <TintedFace appearance={faces[1]!} size={midSize} strength="soft" />
+      </View>
+      {/* char1 — front right, fully opaque */}
+      <View
+        style={[
+          styles.stackSlot,
+          {
+            left: char1Left,
+            top: char1Top,
+            zIndex: 3,
+          },
+        ]}
+      >
+        <CharacterFace appearance={faces[0]!} size={frontSize} />
+      </View>
+    </View>
+  );
+}
+
+/** Recessed peers: filter tints sprite pixels only (transparent stays clear — no box). */
+function TintedFace({
+  appearance,
+  size,
+  strength,
+}: {
+  appearance: Appearance;
+  size: number;
+  strength: "soft" | "strong";
+}) {
+  return (
+    <View
+      style={[
+        { width: size, height: size },
+        strength === "strong" ? styles.tintStrong : styles.tintSoft,
+      ]}
+    >
+      <CharacterFace appearance={appearance} size={size} />
     </View>
   );
 }
@@ -117,40 +198,32 @@ export function ConversationAvatar({
 const styles = StyleSheet.create({
   faceClip: {
     overflow: "hidden",
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.borderStrong,
-    alignItems: "center",
-    justifyContent: "flex-start",
+    backgroundColor: "transparent",
+    borderRadius: 0,
   },
   fallback: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.accentSoft,
-    borderWidth: 2,
-    borderColor: colors.borderStrong,
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radii.sm,
   },
   fallbackText: {
     fontSize: 18,
     fontWeight: "700",
-    color: colors.ink,
+    color: colors.inkMuted,
   },
   stackSlot: {
     position: "absolute",
   },
-  extraBadge: {
-    position: "absolute",
-    right: -2,
-    bottom: -2,
-    zIndex: 10,
-    backgroundColor: colors.surfaceRaised,
-    borderWidth: 1.5,
-    borderColor: colors.borderStrong,
-    alignItems: "center",
-    justifyContent: "center",
+  tintSoft: {
+    // Web: dims only drawn pixels; alpha channel stays intact.
+    // @ts-expect-error RN web filter
+    filter: "brightness(0.92) saturate(0.7) contrast(0.96)",
   },
-  extraText: {
-    fontSize: 9,
-    fontWeight: "800",
-    color: colors.ink,
+  tintStrong: {
+    // @ts-expect-error RN web filter
+    filter: "brightness(0.86) saturate(0.55) contrast(0.94)",
   },
 });

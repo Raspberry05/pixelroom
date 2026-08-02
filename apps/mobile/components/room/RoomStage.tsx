@@ -33,7 +33,10 @@ import {
   DISPLAY_SCALE_MAX,
   DISPLAY_SCALE_MIN,
   EDGE_WALL_PX,
+  FLOOR_DEPTH_CELLS,
+  FLOOR_HEIGHT_MAX_RATIO,
   MAX_SIDE_EXPANSIONS,
+  expandCostForSide,
   REF_STAGE_HEIGHT,
   SPRITE_BY_ID,
   VIEW_BOOST,
@@ -49,15 +52,47 @@ import {
   tileKey,
   worldCellCount,
   type EditTool,
+  type FurnitureSprite,
   type PlacedFurniture,
   type PlacedWindow,
   type RoomDocument,
 } from "../../data/roomLayout";
 import { FURNITURE } from "../../data/sprites";
 import { colors } from "../../theme";
+import { AtlasSprite } from "../AtlasSprite";
 import { PixelImage } from "../PixelImage";
+import {
+  hasAtlasCrop,
+  type AtlasCropFields,
+} from "../../data/atlasCrop";
+import { housingSkuOverride } from "../../data/catalogExtras";
+import {
+  cropOverride,
+  overrideActiveVisualStateId,
+  overrideHitPad,
+} from "../../data/spriteOverrides";
 import { CharacterSprite } from "./CharacterSprite";
 import { FurniturePiece, FLOOR_RATIO } from "./FurniturePiece";
+import { UnpackingMiniGame } from "./UnpackingMiniGame";
+import { DirtOverlay } from "./DirtOverlay";
+import type { FurnitureCareState } from "../../data/furnitureCare";
+import { careIndicatorForSprite } from "../../data/furnitureCare";
+
+function tileCrop(sprite: FurnitureSprite): AtlasCropFields | null {
+  const fromFurniture = cropOverride(sprite);
+  if (fromFurniture) return fromFurniture;
+  const invId = inventoryIdForSprite(sprite);
+  if (!invId) return null;
+  const sku = housingSkuOverride(invId);
+  if (!sku || !hasAtlasCrop(sku)) return null;
+  return {
+    atlasKey: sku.atlasKey ?? "interior",
+    spriteX: sku.spriteX,
+    spriteY: sku.spriteY,
+    spriteWidth: sku.spriteWidth,
+    spriteHeight: sku.spriteHeight,
+  };
+}
 
 type Actor = {
   characterId: CharacterId;
@@ -88,11 +123,18 @@ type Props = {
   onSelectId: (id: string | null) => void;
   /** Called when user taps + to expand; parent charges coins then applies expand. */
   onRequestExpand: (side: "left" | "right") => void;
-  expandCost: number;
-  /** Fired when scrolled away so self is off-screen — walk toward view center. */
+  /** Called when user taps − to refund the outermost expansion on that side. */
+  onRequestShrink: (side: "left" | "right") => void;
+  /** Walk self toward a logical X (camera center, or soft approach to an on-screen peer). */
   onViewportCenterX?: (logicalX: number) => void;
-  /** User keys whose characters are currently visible in the viewport. */
+  /** User keys whose characters + bubbles are fully readable (HUD can hide). */
   onVisibleUserKeys?: (keys: string[]) => void;
+  /** User keys at least half-visible — OK to walk over and talk. */
+  onBodyVisibleUserKeys?: (keys: string[]) => void;
+  /** Current dirt level (0-3) for displaying dirt overlays. */
+  dirtLevel?: number;
+  /** Per-room plant / TV / bed care timestamps for indicators. */
+  furnitureCare?: FurnitureCareState | null;
 };
 
 export { FLOOR_RATIO };
@@ -167,15 +209,19 @@ export function RoomStage({
   selectedId,
   onSelectId,
   onRequestExpand,
-  expandCost,
+  onRequestShrink,
   onViewportCenterX,
   onVisibleUserKeys,
+  onBodyVisibleUserKeys,
+  dirtLevel = 0,
+  furnitureCare = null,
 }: Props) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragKind, setDragKind] = useState<"furniture" | "window" | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
   const [panLocked, setPanLocked] = useState(false);
+  const [unpackingFurniture, setUnpackingFurniture] = useState<PlacedFurniture | null>(null);
 
   const dragOrigin = useRef<{ gx: number; gy: number } | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
@@ -233,8 +279,9 @@ export function RoomStage({
 
   const ready = size.width > 0 && size.height > 0;
   const cols = worldCellCount(document);
-  // Near-fixed cell size (~150% via VIEW_BOOST in CELL_PX). Soft-scale with
-  // stage height only — never shrink to fit width; scroll instead.
+  // Near-fixed cell size. Soft-scale with stage height; never shrink to fit
+  // width (scroll instead). Floor depth is a fixed cell count so phone and
+  // tablet share the same furniture/tile grid — extra height grows the wall.
   let displayScale = 1;
   let cellPx = CELL_PX;
   if (ready) {
@@ -243,7 +290,17 @@ export function RoomStage({
       Math.max(DISPLAY_SCALE_MIN, size.height / REF_STAGE_HEIGHT),
     );
     cellPx = Math.max(36, Math.round(CELL_PX * displayScale));
+    const maxFloorH = size.height * FLOOR_HEIGHT_MAX_RATIO;
+    if (FLOOR_DEPTH_CELLS * cellPx > maxFloorH) {
+      cellPx = Math.max(36, Math.floor(maxFloorH / FLOOR_DEPTH_CELLS));
+    }
   }
+  const floorRows = ready ? FLOOR_DEPTH_CELLS : 0;
+  const floorH = floorRows * cellPx;
+  const floorRatio = ready && size.height > 0 ? floorH / size.height : FLOOR_RATIO;
+  const wallRows = ready
+    ? Math.max(1, Math.floor(Math.max(0, size.height - floorH) / cellPx))
+    : 0;
   const chunkDisplayW = cellPx * CHUNK_CELLS;
   const worldW = cellPx * cols;
   // Always keep a visible exterior wall past each end of the room so scroll
@@ -253,12 +310,7 @@ export function RoomStage({
     ? Math.max(edgeWall, Math.ceil((size.width - worldW) / 2))
     : edgeWall;
   const contentW = worldW + filler * 2;
-  const floorH = size.height * FLOOR_RATIO;
   const maxGx = Math.max(0, cols - 2);
-  const floorRows = ready ? Math.ceil(floorH / cellPx) + 1 : 0;
-  const wallRows = ready
-    ? Math.max(1, Math.floor(((1 - FLOOR_RATIO) * size.height) / cellPx))
-    : 0;
   const homeOriginPx = document.expansionsLeft * chunkDisplayW;
   const canScroll = ready && contentW > size.width + 1;
 
@@ -307,8 +359,37 @@ export function RoomStage({
   onViewportCenterXRef.current = onViewportCenterX;
   const onVisibleUserKeysRef = useRef(onVisibleUserKeys);
   onVisibleUserKeysRef.current = onVisibleUserKeys;
+  const onBodyVisibleUserKeysRef = useRef(onBodyVisibleUserKeys);
+  onBodyVisibleUserKeysRef.current = onBodyVisibleUserKeys;
   const viewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastVisibleKey = useRef("");
+  const lastBodyVisibleKey = useRef("");
+  const visibleKeysRef = useRef<Set<string>>(new Set());
+  const lastFollowSendAt = useRef(0);
+  const lastSocialSendAt = useRef(0);
+  const cameraFollowActiveRef = useRef(false);
+
+  function handleTapPacked(item: PlacedFurniture) {
+    if (editing) return;
+    setUnpackingFurniture(item);
+  }
+
+  function handleUnpackComplete() {
+    if (!unpackingFurniture) return;
+    onChangeDocument({
+      ...document,
+      furniture: document.furniture.map((p) =>
+        p.id === unpackingFurniture.id ? { ...p, packed: false } : p,
+      ),
+    });
+    setUnpackingFurniture(null);
+    onStatus("Furniture unpacked!");
+  }
+
+  function handleUnpackCancel() {
+    setUnpackingFurniture(null);
+  }
 
   function characterContentBounds(
     logicalX: number,
@@ -328,62 +409,148 @@ export function RoomStage({
     const span = Math.max(CHUNK_CELLS, cols);
     const viewLeft = scrollX;
     const viewRight = scrollX + size.width;
-    const pad = Math.min(48, size.width * 0.06);
-    // Keys whose in-world speech bubbles are on-screen (not just the body).
+    // Soft edge: anything near the bezel counts as unreadable.
+    const edgeInset = Math.max(24, Math.min(72, size.width * 0.1));
+    // Keys whose in-world speech is fully readable (HUD should hide for them).
     const chatVisible: string[] = [];
-    let selfOnScreen = true;
+    const bodyVisible: string[] = [];
     let selfLogicalX = span / 2;
     // Overhead chat band is ~180px wide, centered on the sprite.
-    const bubbleHalf = 80;
+    const bubbleHalf = 90;
 
     for (const actor of actors) {
       const member = room.memberState[String(actor.characterId)];
       if (!member) continue;
       const bounds = characterContentBounds(member.position.x, span, displayScale);
-      const bodyOnScreen =
-        bounds.right > viewLeft + pad && bounds.left < viewRight - pad;
       const bubbleLeft = bounds.center - bubbleHalf;
       const bubbleRight = bounds.center + bubbleHalf;
-      const bubblesOnScreen =
-        bubbleRight > viewLeft + pad && bubbleLeft < viewRight - pad;
+      const bodyHalfVisible =
+        bounds.right > viewLeft + bounds.drawBase * 0.5 &&
+        bounds.left < viewRight - bounds.drawBase * 0.5;
 
-      // HUD fallback hides only when the in-world chat band is visible.
+      // Only treat chat as "on screen" when the whole character AND its
+      // overhead bubble sit fully inside the readable viewport. Edge / half
+      // clips keep the bottom HUD bubbles so text stays readable.
+      const characterFullyOnScreen =
+        bounds.left >= viewLeft + edgeInset &&
+        bounds.right <= viewRight - edgeInset;
+      const bubbleFullyOnScreen =
+        bubbleLeft >= viewLeft + edgeInset &&
+        bubbleRight <= viewRight - edgeInset;
+
       // Offline / sleeping never count — no bubbles for them at all.
       if (
         member.presence === "active" &&
-        bubblesOnScreen
+        characterFullyOnScreen &&
+        bubbleFullyOnScreen
       ) {
         chatVisible.push(actor.userKey);
       }
       if (actor.isSelf) {
-        selfOnScreen = bodyOnScreen;
         selfLogicalX = member.position.x;
+      } else if (member.presence === "active" && bodyHalfVisible) {
+        bodyVisible.push(actor.userKey);
       }
     }
 
     const visibleKey = chatVisible.slice().sort().join(",");
+    visibleKeysRef.current = new Set(bodyVisible);
     if (visibleKey !== lastVisibleKey.current) {
       lastVisibleKey.current = visibleKey;
       onVisibleUserKeysRef.current?.(chatVisible);
     }
+    const bodyKey = bodyVisible.slice().sort().join(",");
+    if (bodyKey !== lastBodyVisibleKey.current) {
+      lastBodyVisibleKey.current = bodyKey;
+      onBodyVisibleUserKeysRef.current?.(bodyVisible);
+    }
 
-    // Stay in camera: when scrolled off-screen, walk toward the view center.
-    if (selfOnScreen || !onViewportCenterXRef.current) return;
+    // Rule: character follows the camera — never pan the camera to chase talk.
+    // Edge deadzone / off-frame → walk self toward the current view center.
+    if (!onViewportCenterXRef.current) return;
 
-    const viewCenter = scrollX + size.width / 2;
-    const worldX = viewCenter - filler;
-    const targetX = Math.max(0, Math.min(span, (worldX / worldW) * span));
-    if (Math.abs(targetX - selfLogicalX) < 0.35) return;
+    const edgeZone = Math.max(56, size.width * 0.2);
 
-    if (viewportTimer.current) clearTimeout(viewportTimer.current);
-    viewportTimer.current = setTimeout(() => {
-      onViewportCenterXRef.current?.(targetX);
-    }, 140);
+    function inCameraComfort(logicalX: number): boolean {
+      const bounds = characterContentBounds(logicalX, span, displayScale);
+      if (bounds.right < viewLeft || bounds.left > viewRight) return false;
+      if (bounds.center < viewLeft + edgeZone) return false;
+      if (bounds.center > viewRight - edgeZone) return false;
+      return true;
+    }
+
+    const needsFollow = !inCameraComfort(selfLogicalX);
+
+    if (!needsFollow) {
+      cameraFollowActiveRef.current = false;
+      if (viewportTimer.current) {
+        clearTimeout(viewportTimer.current);
+        viewportTimer.current = null;
+      }
+
+      // Soft approach only toward peers body-visible on THIS screen, and only
+      // while the step keeps self inside the camera comfort band.
+      if (editing || bodyVisible.length === 0) return;
+      const nowSocial = Date.now();
+      if (nowSocial - lastSocialSendAt.current < 140) return;
+
+      let bestDx = 0;
+      let bestAbs = Infinity;
+      for (const key of bodyVisible) {
+        const other = actors.find((a) => a.userKey === key);
+        if (!other) continue;
+        const om = room.memberState[String(other.characterId)];
+        if (!om || om.presence !== "active") continue;
+        const dx = om.position.x - selfLogicalX;
+        const adx = Math.abs(dx);
+        if (adx < bestAbs) {
+          bestAbs = adx;
+          bestDx = dx;
+        }
+      }
+      if (bestAbs <= 1.25) return;
+
+      const socialStep = Math.sign(bestDx) * Math.min(0.35, bestAbs - 1.15);
+      if (Math.abs(socialStep) < 0.08) return;
+      const nextX = selfLogicalX + socialStep;
+      if (!inCameraComfort(nextX)) return;
+
+      lastSocialSendAt.current = nowSocial;
+      onViewportCenterXRef.current(nextX);
+      return;
+    }
+
+    cameraFollowActiveRef.current = true;
+    if (scrollIdleTimer.current) clearTimeout(scrollIdleTimer.current);
+    scrollIdleTimer.current = setTimeout(() => {
+      cameraFollowActiveRef.current = false;
+    }, 380);
+
+    const viewCenterPx = scrollX + size.width / 2;
+    const cameraWorldX = viewCenterPx - filler;
+    const cameraLogicalX = Math.max(
+      0,
+      Math.min(span, (cameraWorldX / Math.max(1, worldW)) * span),
+    );
+    const delta = cameraLogicalX - selfLogicalX;
+    if (Math.abs(delta) < 0.06) return;
+
+    const now = Date.now();
+    // React quickly while scrolling — throttle just enough to avoid floods.
+    if (now - lastFollowSendAt.current < 55) return;
+    lastFollowSendAt.current = now;
+
+    // Close a chunk of the remaining gap each tick; sprite lerp smooths it.
+    const followStep = Math.max(
+      0.28,
+      Math.min(1.6, Math.abs(delta) * 0.55),
+    );
+    const step = Math.sign(delta) * Math.min(Math.abs(delta), followStep);
+    onViewportCenterXRef.current(selfLogicalX + step);
   }
 
   function onScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
-    const x = event.nativeEvent.contentOffset.x;
-    reportViewport(x);
+    reportViewport(event.nativeEvent.contentOffset.x);
   }
 
   // Re-check visibility when members move (peer walks into/out of view).
@@ -403,19 +570,21 @@ export function RoomStage({
     for (let i = pieces.length - 1; i >= 0; i -= 1) {
       const item = pieces[i]!;
       const { w, h: dh } = drawnSize(item.sprite, cp);
+      // Generous pad — tall/packed sprites were easy to miss; DevTools hitPad adds more.
+      const pad = Math.max(10, cp * 0.2) + overrideHitPad(item.sprite, cp);
       const left = item.gx * cp;
-      const seamY = h * FLOOR_RATIO;
+      const seamY = layoutRef.current.floorH;
       const floorBaseline = Math.max(4, seamY * 0.14);
       const bottom =
         item.anchor === "wall"
           ? seamY + item.gy * cp
           : floorBaseline + item.gy * cp;
-      // Floor collision is half-cell; keep full sprite for click/drag targeting.
+      // Full sprite AABB (+ pad). Not the half-cell placement footprint.
       if (
-        localX >= left &&
-        localX <= left + w &&
-        fromBottom >= bottom &&
-        fromBottom <= bottom + dh
+        localX >= left - pad &&
+        localX <= left + w + pad &&
+        fromBottom >= bottom - pad &&
+        fromBottom <= bottom + dh + pad
       ) {
         return item;
       }
@@ -467,7 +636,7 @@ export function RoomStage({
     const { cellPx: cp, cols: colsNow, floorRows: floorRowsNow, wallRows: wallRowsNow } =
       layoutRef.current;
     const fromBottom = h - localY;
-    const seamY = h * FLOOR_RATIO;
+    const seamY = layoutRef.current.floorH;
     const gx = clampGrid(Math.floor(localX / cp), 0, colsNow - 1);
     const currentTool = toolRef.current;
     const onFloor = fromBottom < seamY;
@@ -578,11 +747,8 @@ export function RoomStage({
     const hit = hitFurnitureRef.current(locationX, locationY);
     const hitWin = hitWindowRef.current(locationX, locationY);
     const currentTool = toolRef.current;
-    const { cellPx: cp, maxGx: maxGxNow } = layoutRef.current;
-    const maxWallGyNowResolved = Math.max(
-      1,
-      Math.floor(((1 - FLOOR_RATIO) * sizeRef.current.height) / cp) - 3,
-    );
+    const { cellPx: cp, maxGx: maxGxNow, wallRows: wallRowsNow } = layoutRef.current;
+    const maxWallGyNowResolved = Math.max(1, wallRowsNow - 3);
     lastPaintKey.current = null;
     painting.current = false;
 
@@ -626,7 +792,7 @@ export function RoomStage({
         return "drag";
       }
       const fromBottom = sizeRef.current.height - locationY;
-      const seamY = sizeRef.current.height * FLOOR_RATIO;
+      const seamY = layoutRef.current.floorH;
       if (fromBottom < seamY) {
         onStatusRef.current("Place windows on the wall");
         return "done";
@@ -666,6 +832,31 @@ export function RoomStage({
       return "done";
     }
 
+    // Prefer selecting existing furniture/windows over painting through them.
+    // (Tile/paint tools used to swallow taps, making pieces look "untappable".)
+    if (hit) {
+      onSelectRef.current(hit.id);
+      dragIdRef.current = hit.id;
+      dragKindRef.current = "furniture";
+      setDragId(hit.id);
+      setDragKind("furniture");
+      dragOrigin.current = { gx: hit.gx, gy: hit.gy };
+      dragOffsetRef.current = { x: 0, y: 0 };
+      setDragOffset({ x: 0, y: 0 });
+      return "drag";
+    }
+    if (hitWin) {
+      onSelectRef.current(hitWin.id);
+      dragIdRef.current = hitWin.id;
+      dragKindRef.current = "window";
+      setDragId(hitWin.id);
+      setDragKind("window");
+      dragOrigin.current = { gx: hitWin.gx, gy: hitWin.gy };
+      dragOffsetRef.current = { x: 0, y: 0 };
+      setDragOffset({ x: 0, y: 0 });
+      return "drag";
+    }
+
     if (isTileTool(currentTool)) {
       painting.current = true;
       applyTileBrush(locationX, locationY, false);
@@ -675,7 +866,7 @@ export function RoomStage({
     if (currentTool.kind === "paint") {
       const gx = clampGrid(Math.floor(locationX / cp), 0, maxGxNow);
       const fromBottom = sizeRef.current.height - locationY;
-      const seamY = sizeRef.current.height * FLOOR_RATIO;
+      const seamY = layoutRef.current.floorH;
       const onWallZone = fromBottom >= seamY;
       const meta = SPRITE_BY_ID[currentTool.sprite];
       if (!meta) return "done";
@@ -719,12 +910,15 @@ export function RoomStage({
         onStatusRef.current("None left in inventory");
         return "done";
       }
+      const defaultVisual = overrideActiveVisualStateId(currentTool.sprite);
       const next: PlacedFurniture = {
         id: createPlacementId(currentTool.sprite),
         sprite: currentTool.sprite,
         gx,
         gy,
         anchor,
+        packed: true,
+        ...(defaultVisual ? { visualStateId: defaultVisual } : {}),
       };
       onChangeInvRef.current(nextInv);
       onChangeDocRef.current({
@@ -732,32 +926,10 @@ export function RoomStage({
         furniture: [...docRef.current.furniture, next],
       });
       onSelectRef.current(next.id);
-      onStatusRef.current(`Placed ${meta.label}`);
+      onStatusRef.current(`Placed ${meta.label} (tap to unpack)`);
       return "done";
     }
 
-    if (hitWin && !hit) {
-      onSelectRef.current(hitWin.id);
-      dragIdRef.current = hitWin.id;
-      dragKindRef.current = "window";
-      setDragId(hitWin.id);
-      setDragKind("window");
-      dragOrigin.current = { gx: hitWin.gx, gy: hitWin.gy };
-      dragOffsetRef.current = { x: 0, y: 0 };
-      setDragOffset({ x: 0, y: 0 });
-      return "drag";
-    }
-    if (hit) {
-      onSelectRef.current(hit.id);
-      dragIdRef.current = hit.id;
-      dragKindRef.current = "furniture";
-      setDragId(hit.id);
-      setDragKind("furniture");
-      dragOrigin.current = { gx: hit.gx, gy: hit.gy };
-      dragOffsetRef.current = { x: 0, y: 0 };
-      setDragOffset({ x: 0, y: 0 });
-      return "drag";
-    }
     onSelectRef.current(null);
     return "done";
   }
@@ -814,11 +986,9 @@ export function RoomStage({
         const origin = dragOrigin.current;
         const offset = dragOffsetRef.current;
         const kind = dragKindRef.current;
-        const { cellPx: cp, maxGx: maxGxNow } = layoutRef.current;
-        const maxWallGyNow = Math.max(
-          1,
-          Math.floor(((1 - FLOOR_RATIO) * sizeRef.current.height) / cp) - 3,
-        );
+        const { cellPx: cp, maxGx: maxGxNow, wallRows: wallRowsRelease } =
+          layoutRef.current;
+        const maxWallGyNow = Math.max(1, wallRowsRelease - 3);
 
         if (id && origin && offset && kind === "furniture") {
           const item = docRef.current.furniture.find((p) => p.id === id);
@@ -970,7 +1140,7 @@ export function RoomStage({
           <View
             style={[
               styles.wall,
-              { backgroundColor: theme.wallTop, bottom: `${FLOOR_RATIO * 100}%` },
+              { backgroundColor: theme.wallTop, bottom: floorH },
             ]}
           />
 
@@ -987,11 +1157,22 @@ export function RoomStage({
                   }}
                   pointerEvents="none"
                 >
-                  <PixelImage
-                    source={FURNITURE.wallStripe}
-                    width={cellPx}
-                    height={cellPx * 3}
-                  />
+                  {(() => {
+                    const crop = tileCrop("wallStripe");
+                    return crop ? (
+                      <AtlasSprite
+                        crop={crop}
+                        width={cellPx}
+                        height={cellPx * 3}
+                      />
+                    ) : (
+                      <PixelImage
+                        source={FURNITURE.wallStripe}
+                        width={cellPx}
+                        height={cellPx * 3}
+                      />
+                    );
+                  })()}
                 </View>
               ))
             : null}
@@ -1028,7 +1209,7 @@ export function RoomStage({
           <View
             style={[
               styles.floor,
-              { height: `${FLOOR_RATIO * 100}%`, backgroundColor: theme.floor },
+              { height: floorH, backgroundColor: theme.floor },
             ]}
           >
             {ready
@@ -1045,7 +1226,22 @@ export function RoomStage({
                           opacity: 0.85,
                         }}
                       >
-                        <PixelImage source={FURNITURE.floor} width={cellPx} height={cellPx} />
+                        {(() => {
+                          const crop = tileCrop("floor");
+                          return crop ? (
+                            <AtlasSprite
+                              crop={crop}
+                              width={cellPx}
+                              height={cellPx}
+                            />
+                          ) : (
+                            <PixelImage
+                              source={FURNITURE.floor}
+                              width={cellPx}
+                              height={cellPx}
+                            />
+                          );
+                        })()}
                       </View>
                     );
                   }),
@@ -1086,6 +1282,13 @@ export function RoomStage({
                   dragOffset={
                     dragKind === "furniture" && dragId === item.id ? dragOffset : null
                   }
+                  onTapPacked={handleTapPacked}
+                  editing={editing}
+                  careIndicator={
+                    !editing && !item.packed && furnitureCare
+                      ? careIndicatorForSprite(item.sprite, furnitureCare)
+                      : null
+                  }
                 />
               ))
             : null}
@@ -1108,7 +1311,12 @@ export function RoomStage({
                     bubbleAlign = dx <= 0 ? "left" : "right";
                     bubbleNudgeX = dx <= 0 ? -10 : 10;
                   }
+                  // Only face someone you can actually see on this screen.
+                  // (Peers walking to you is driven by their own client/camera.)
+                  const otherVisible =
+                    !actor.isSelf || visibleKeysRef.current.has(other.userKey);
                   if (
+                    otherVisible &&
                     member.presence === "active" &&
                     Math.abs(dx) < 3.2 &&
                     Math.abs(member.position.y - om.position.y) < 2.2
@@ -1126,7 +1334,7 @@ export function RoomStage({
                     isSelf={actor.isSelf}
                     stageWidth={worldW}
                     stageHeight={size.height}
-                    floorRatio={FLOOR_RATIO}
+                    floorRatio={floorRatio}
                     worldSpanX={cols}
                     displayScale={displayScale}
                     bubbles={bubblesByUserKey[actor.userKey] ?? []}
@@ -1137,35 +1345,97 @@ export function RoomStage({
                 );
               })
             : null}
+          
+          {/* Dirt overlay */}
+          {dirtLevel > 0 && ready && (
+            <DirtOverlay
+              dirtLevel={dirtLevel}
+              stageWidth={worldW}
+              stageHeight={size.height}
+            />
+          )}
           </Pressable>
 
           {sideWall("right")}
         </View>
       </ScrollView>
 
-      {editing && document.expansionsLeft < MAX_SIDE_EXPANSIONS ? (
-        <Pressable
-          style={styles.plusBtnLeft}
-          onPress={() => onRequestExpand("left")}
-          accessibilityLabel={`Expand room left for ${expandCost} coins`}
-          accessibilityRole="button"
-        >
-          <Text style={styles.plusBtnSymbol}>+</Text>
-          <Text style={styles.plusBtnLabel}>{expandCost}c</Text>
-        </Pressable>
+      {editing ? (
+        <View style={styles.expandClusterLeft}>
+          <Pressable
+            style={[
+              styles.plusBtn,
+              document.expansionsLeft >= MAX_SIDE_EXPANSIONS && styles.expandBtnDisabled,
+            ]}
+            disabled={document.expansionsLeft >= MAX_SIDE_EXPANSIONS}
+            onPress={() => onRequestExpand("left")}
+            accessibilityLabel={`Expand room left for ${expandCostForSide(document.expansionsLeft)} coins`}
+            accessibilityRole="button"
+          >
+            <Text style={styles.plusBtnSymbolOn}>+</Text>
+            <Text style={styles.plusBtnLabelOn}>
+              {expandCostForSide(document.expansionsLeft)}c
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.minusBtn,
+              document.expansionsLeft <= 0 && styles.expandBtnDisabled,
+            ]}
+            disabled={document.expansionsLeft <= 0}
+            onPress={() => onRequestShrink("left")}
+            accessibilityLabel={`Refund left expansion for ${expandCostForSide(Math.max(0, document.expansionsLeft - 1))} coins`}
+            accessibilityRole="button"
+          >
+            <Text style={styles.minusBtnSymbol}>−</Text>
+            <Text style={styles.minusBtnLabel}>
+              {expandCostForSide(Math.max(0, document.expansionsLeft - 1))}c
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
 
-      {editing && document.expansionsRight < MAX_SIDE_EXPANSIONS ? (
-        <Pressable
-          style={styles.plusBtnRight}
-          onPress={() => onRequestExpand("right")}
-          accessibilityLabel={`Expand room right for ${expandCost} coins`}
-          accessibilityRole="button"
-        >
-          <Text style={styles.plusBtnSymbol}>+</Text>
-          <Text style={styles.plusBtnLabel}>{expandCost}c</Text>
-        </Pressable>
+      {editing ? (
+        <View style={styles.expandClusterRight}>
+          <Pressable
+            style={[
+              styles.plusBtn,
+              document.expansionsRight >= MAX_SIDE_EXPANSIONS && styles.expandBtnDisabled,
+            ]}
+            disabled={document.expansionsRight >= MAX_SIDE_EXPANSIONS}
+            onPress={() => onRequestExpand("right")}
+            accessibilityLabel={`Expand room right for ${expandCostForSide(document.expansionsRight)} coins`}
+            accessibilityRole="button"
+          >
+            <Text style={styles.plusBtnSymbolOn}>+</Text>
+            <Text style={styles.plusBtnLabelOn}>
+              {expandCostForSide(document.expansionsRight)}c
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.minusBtn,
+              document.expansionsRight <= 0 && styles.expandBtnDisabled,
+            ]}
+            disabled={document.expansionsRight <= 0}
+            onPress={() => onRequestShrink("right")}
+            accessibilityLabel={`Refund right expansion for ${expandCostForSide(Math.max(0, document.expansionsRight - 1))} coins`}
+            accessibilityRole="button"
+          >
+            <Text style={styles.minusBtnSymbol}>−</Text>
+            <Text style={styles.minusBtnLabel}>
+              {expandCostForSide(Math.max(0, document.expansionsRight - 1))}c
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
+
+      <UnpackingMiniGame
+        visible={unpackingFurniture != null}
+        furniture={unpackingFurniture}
+        onComplete={handleUnpackComplete}
+        onCancel={handleUnpackCancel}
+      />
     </View>
   );
 }
@@ -1279,27 +1549,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.borderStrong,
     zIndex: 1,
   },
-  plusBtnLeft: {
+  expandClusterLeft: {
     position: "absolute",
     left: 8,
     top: "50%",
-    marginTop: -32,
+    marginTop: -72,
     zIndex: 50,
-    width: 56,
-    height: 64,
-    borderRadius: 28,
-    backgroundColor: colors.accent,
+    gap: 8,
     alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: colors.borderStrong,
   },
-  plusBtnRight: {
+  expandClusterRight: {
     position: "absolute",
     right: 8,
     top: "50%",
-    marginTop: -32,
+    marginTop: -72,
     zIndex: 50,
+    gap: 8,
+    alignItems: "center",
+  },
+  plusBtn: {
     width: 56,
     height: 64,
     borderRadius: 28,
@@ -1309,16 +1577,42 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.borderStrong,
   },
-  plusBtnSymbol: {
+  minusBtn: {
+    width: 56,
+    height: 64,
+    borderRadius: 28,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+  },
+  expandBtnDisabled: {
+    opacity: 0.35,
+  },
+  plusBtnSymbolOn: {
     fontSize: 22,
     fontWeight: "700",
     color: colors.surfaceRaised,
     lineHeight: 24,
   },
-  plusBtnLabel: {
+  plusBtnLabelOn: {
     fontSize: 9,
     fontWeight: "700",
     color: colors.surfaceRaised,
+    letterSpacing: 0.3,
+    textTransform: "lowercase",
+  },
+  minusBtnSymbol: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: colors.ink,
+    lineHeight: 24,
+  },
+  minusBtnLabel: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: colors.ink,
     letterSpacing: 0.3,
     textTransform: "lowercase",
   },

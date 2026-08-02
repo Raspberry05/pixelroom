@@ -33,6 +33,21 @@ describe("parseCommand", () => {
       targetName: null,
       raw: "*watch",
     });
+    expect(parseCommand("*watch tv")).toEqual({
+      action: "watch",
+      targetName: null,
+      raw: "*watch tv",
+    });
+    expect(parseCommand("*make bed")).toEqual({
+      action: "makebed",
+      targetName: null,
+      raw: "*make bed",
+    });
+    expect(parseCommand("*water plant")).toEqual({
+      action: "water",
+      targetName: null,
+      raw: "*water plant",
+    });
     expect(parseCommand("*kiss @Sam")).toEqual({
       action: "kiss",
       targetName: "Sam",
@@ -190,6 +205,26 @@ describe("tickRoom", () => {
     expect(result.events.length).toBeGreaterThanOrEqual(1);
     expect(result.events[0]?.source).toBe("auto");
     expect(["wave", "talk", "sit", "sing"]).toContain(result.events[0]?.action);
+  });
+
+  it("keeps a player-commanded action instead of auto thrashing", () => {
+    const a = createCharacter({ accountId: "1", displayName: "A", now: 1 });
+    const b = createCharacter({ accountId: "2", displayName: "B", now: 1 });
+    let room = createRoom({ kind: "dm", memberIds: [a.id, b.id], now: 1 });
+    room = setPresence(room, a.id, "active", 2);
+    room = setPresence(room, b.id, "active", 3);
+    room = performAction(room, a.id, "sit", { source: "command", now: 100 }).room;
+
+    const result = tickRoom(room, {
+      now: 5_000,
+      config: { autoInteractChance: 1, maxAutoInteractions: 3 },
+      random: () => 0.1,
+    });
+
+    expect(result.room.memberState[a.id]?.currentAction).toBe("sit");
+    expect(
+      result.events.every((e) => String(e.actorId) !== String(a.id)),
+    ).toBe(true);
   });
 });
 

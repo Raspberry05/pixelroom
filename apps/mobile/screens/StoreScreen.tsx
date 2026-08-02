@@ -5,9 +5,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import type { Appearance } from "@pixelroom/core";
+import { CatalogArt } from "../components/AtlasSprite";
+import { CatalogCropThumb } from "../components/devtools/CatalogAtlasSection";
 import { PixelImage } from "../components/PixelImage";
 import { TopNav } from "../components/TopNav";
 import {
@@ -16,13 +19,20 @@ import {
   type InventoryState,
 } from "../data/inventory";
 import {
-  CLOTH_CATALOG,
   STORE_TABS,
   inventoryForTab,
   spriteSourceForItem,
-  type ClothStoreItem,
   type StoreTabId,
 } from "../data/storeCatalog";
+import {
+  clothesForStore,
+  cropForInventoryItem,
+  dishesForStore,
+  groceryForStore,
+  type ClothStoreListing,
+  type DishStoreListing,
+} from "../data/catalogExtras";
+import type { GroceryItem } from "../data/groceryItems";
 import { WORLD_SCALE } from "../data/roomLayout";
 import { colors, radii, space, typography } from "../theme";
 
@@ -37,6 +47,15 @@ type Props = {
 
 const COINS_KEY = "pixelroom.coins";
 const THUMB = 48 * WORLD_SCALE;
+const GRID_PAD = space.lg;
+const GRID_GAP = space.md;
+
+/** Phone 2 · tablet 3 · desktop 4 */
+function columnsForWidth(width: number): number {
+  if (width >= 1100) return 4;
+  if (width >= 720) return 3;
+  return 2;
+}
 
 export function loadCoins(fallback = 500): number {
   if (Platform.OS === "web" && typeof localStorage !== "undefined") {
@@ -70,6 +89,13 @@ export function StoreScreen({
 }: Props) {
   const [tab, setTab] = useState<StoreTabId>("furniture");
   const ownedSet = useMemo(() => new Set(ownedClothes), [ownedClothes]);
+  const { width: windowWidth } = useWindowDimensions();
+  const columns = columnsForWidth(windowWidth);
+  const cardWidth = useMemo(() => {
+    const inner = windowWidth - GRID_PAD * 2;
+    const gaps = GRID_GAP * (columns - 1);
+    return Math.floor((inner - gaps) / columns);
+  }, [windowWidth, columns]);
 
   function buyInventory(id: string, price: number) {
     if (coins < price) return;
@@ -77,7 +103,24 @@ export function StoreScreen({
     onChangeInventory(refund(inventory, id, 1));
   }
 
-  function buyCloth(item: ClothStoreItem) {
+  function buyGrocery(item: GroceryItem) {
+    if (coins < item.price) return;
+
+    // Warn about fridge requirement (but still allow purchase)
+    if (item.requiresFridge) {
+      const owned = getQty(inventory, item.id);
+      if (owned >= 3) {
+        // Limit storage without fridge (placeholder - ideally would check room)
+        alert("⚠️ Without a fridge, you can only store limited perishable items!");
+        return;
+      }
+    }
+
+    onChangeCoins(coins - item.price);
+    onChangeInventory(refund(inventory, item.id, 1));
+  }
+
+  function buyCloth(item: ClothStoreListing) {
     if (ownedSet.has(item.id)) {
       onUnlockCloth(item.id, item.patch);
       return;
@@ -87,7 +130,17 @@ export function StoreScreen({
     onUnlockCloth(item.id, item.patch);
   }
 
+  function buyDish(item: DishStoreListing) {
+    if (coins < item.price) return;
+    onChangeCoins(coins - item.price);
+    onChangeInventory(refund(inventory, item.id, 1));
+  }
+
+  // Recompute from DevTools localStorage each render so edits/deletes show up.
   const inventoryItems = inventoryForTab(tab);
+  const catalogEmpty =
+    (tab === "furniture" || tab === "housing") && inventoryItems.length === 0;
+  const dishList = tab === "dishes" ? dishesForStore() : [];
 
   return (
     <View style={styles.flex}>
@@ -109,54 +162,149 @@ export function StoreScreen({
       </View>
 
       <ScrollView contentContainerStyle={styles.grid}>
-        {tab === "clothes"
-          ? CLOTH_CATALOG.map((item) => {
-              const owned = ownedSet.has(item.id);
-              const canBuy = owned || coins >= item.price;
+        {tab === "grocery"
+          ? groceryForStore().map((item) => {
+              const owned = getQty(inventory, item.id);
+              const canBuy = coins >= item.price;
               return (
-                <View key={item.id} style={styles.card}>
+                <View key={item.id} style={[styles.card, { width: cardWidth }]}>
                   <View style={styles.thumbWrap}>
-                    <PixelImage source={item.source} width={THUMB} height={THUMB} />
+                    <CatalogCropThumb
+                      crop={item.crop}
+                      size={THUMB}
+                      fallback={
+                        <Text style={styles.groceryEmoji}>{item.emoji}</Text>
+                      }
+                    />
                   </View>
                   <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>{owned ? "owned · equip" : "outfit"}</Text>
+                  <Text style={styles.meta}>
+                    owned ×{owned}
+                    {item.requiresFridge && " 🧊"}
+                  </Text>
                   <Pressable
                     style={[styles.btn, !canBuy && styles.btnDisabled]}
-                    onPress={() => buyCloth(item)}
+                    onPress={() => buyGrocery(item)}
                     disabled={!canBuy}
                   >
-                    <Text style={styles.btnText}>
-                      {owned ? "Equip" : `Buy · ${item.price}c`}
-                    </Text>
+                    <Text style={styles.btnText}>Buy · {item.price}c</Text>
                   </Pressable>
                 </View>
               );
             })
-          : inventoryItems.map((item) => {
-              const owned = getQty(inventory, item.id);
-              const canBuy = coins >= item.price;
-              const source = spriteSourceForItem(item);
-              return (
-                <View key={item.id} style={styles.card}>
-                  <View style={styles.thumbWrap}>
-                    {source ? (
-                      <PixelImage source={source} width={THUMB} height={THUMB} />
-                    ) : (
-                      <View style={styles.swatchFallback} />
-                    )}
+          : tab === "dishes"
+            ? dishList.length === 0
+              ? (
+                  <Text style={styles.emptyCatalog}>
+                    No sellable dishes yet. In DevTools → Items → Dishes, set a
+                    dish to Sellable (cooked recipes stay Hidden by default).
+                  </Text>
+                )
+              : dishList.map((item) => {
+                  const owned = getQty(inventory, item.id);
+                  const canBuy = coins >= item.price;
+                  return (
+                    <View
+                      key={item.id}
+                      style={[styles.card, { width: cardWidth }]}
+                    >
+                      <View style={styles.thumbWrap}>
+                        <CatalogCropThumb
+                          crop={item.crop}
+                          size={THUMB}
+                          fallback={
+                            <Text style={styles.groceryEmoji}>{item.emoji}</Text>
+                          }
+                        />
+                      </View>
+                      <Text style={styles.name}>{item.name}</Text>
+                      <Text style={styles.meta}>owned ×{owned}</Text>
+                      <Pressable
+                        style={[styles.btn, !canBuy && styles.btnDisabled]}
+                        onPress={() => buyDish(item)}
+                        disabled={!canBuy}
+                      >
+                        <Text style={styles.btnText}>
+                          Buy · {item.price}c
+                        </Text>
+                      </Pressable>
+                    </View>
+                  );
+                })
+            : tab === "clothes"
+            ? clothesForStore().map((item) => {
+                const owned = ownedSet.has(item.id);
+                const canBuy = owned || coins >= item.price;
+                return (
+                  <View key={item.id} style={[styles.card, { width: cardWidth }]}>
+                    <View style={styles.thumbWrap}>
+                      <CatalogCropThumb
+                        crop={item.crop}
+                        size={THUMB}
+                        fallback={
+                          <PixelImage
+                            source={item.source}
+                            width={THUMB}
+                            height={THUMB}
+                          />
+                        }
+                      />
+                    </View>
+                    <Text style={styles.name}>{item.name}</Text>
+                    <Text style={styles.meta}>{owned ? "owned · equip" : "outfit"}</Text>
+                    <Pressable
+                      style={[styles.btn, !canBuy && styles.btnDisabled]}
+                      onPress={() => buyCloth(item)}
+                      disabled={!canBuy}
+                    >
+                      <Text style={styles.btnText}>
+                        {owned ? "Equip" : `Buy · ${item.price}c`}
+                      </Text>
+                    </Pressable>
                   </View>
-                  <Text style={styles.name}>{item.name}</Text>
-                  <Text style={styles.meta}>owned ×{owned}</Text>
-                  <Pressable
-                    style={[styles.btn, !canBuy && styles.btnDisabled]}
-                    onPress={() => buyInventory(item.id, item.price)}
-                    disabled={!canBuy}
-                  >
-                    <Text style={styles.btnText}>Buy +1 · {item.price}c</Text>
-                  </Pressable>
-                </View>
-              );
-            })}
+                );
+              })
+            : catalogEmpty ? (
+                <Text style={styles.emptyCatalog}>
+                  No sellable items yet. In DevTools → Items, Load catalog (or
+                  + New), and set “In Store catalog” to Sellable. Deleted or
+                  Hidden items won’t appear here.
+                </Text>
+              ) : (
+                inventoryItems.map((item) => {
+                  const owned = getQty(inventory, item.id);
+                  const canBuy = coins >= item.price;
+                  const source = spriteSourceForItem(item);
+                  const crop = cropForInventoryItem(item);
+                  return (
+                    <View
+                      key={item.id}
+                      style={[styles.card, { width: cardWidth }]}
+                    >
+                      <View style={styles.thumbWrap}>
+                        <CatalogArt
+                          crop={crop}
+                          fallbackSource={source}
+                          width={THUMB}
+                          height={THUMB}
+                          fallback={<View style={styles.swatchFallback} />}
+                        />
+                      </View>
+                      <Text style={styles.name}>{item.name}</Text>
+                      <Text style={styles.meta}>owned ×{owned}</Text>
+                      <Pressable
+                        style={[styles.btn, !canBuy && styles.btnDisabled]}
+                        onPress={() => buyInventory(item.id, item.price)}
+                        disabled={!canBuy}
+                      >
+                        <Text style={styles.btnText}>
+                          Buy +1 · {item.price}c
+                        </Text>
+                      </Pressable>
+                    </View>
+                  );
+                })
+              )}
       </ScrollView>
     </View>
   );
@@ -164,6 +312,13 @@ export function StoreScreen({
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.bg },
+  emptyCatalog: {
+    ...typography.body,
+    color: colors.inkMuted,
+    padding: space.xl,
+    lineHeight: 22,
+    maxWidth: 420,
+  },
   tabs: {
     flexDirection: "row",
     gap: space.sm,
@@ -191,13 +346,12 @@ const styles = StyleSheet.create({
   },
   tabTextOn: { color: colors.accent },
   grid: {
-    padding: space.lg,
+    padding: GRID_PAD,
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: space.md,
+    gap: GRID_GAP,
   },
   card: {
-    width: "47%",
     backgroundColor: colors.surface,
     borderWidth: 2,
     borderColor: colors.borderStrong,
@@ -236,4 +390,7 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.4 },
   btnText: { color: colors.surfaceRaised, fontWeight: "700", fontSize: 12 },
+  groceryEmoji: {
+    fontSize: 48,
+  },
 });

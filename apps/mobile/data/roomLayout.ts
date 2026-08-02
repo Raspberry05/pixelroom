@@ -1,5 +1,6 @@
 import type { ImageSourcePropType } from "react-native";
 import { FURNITURE } from "./sprites";
+import { effectiveNativeSize } from "./spriteOverrides";
 
 /** Native pixel size of one world grid cell (matches most interior tiles). */
 export const GRID_CELL = 16;
@@ -33,12 +34,73 @@ export const REF_STAGE_HEIGHT = 640;
 /** Soft scale bounds so giant/tiny stages don't smash proportions vs characters. */
 export const DISPLAY_SCALE_MIN = 0.92;
 export const DISPLAY_SCALE_MAX = 1.12;
+/**
+ * Shared floor depth in grid cells — same on phone and tablet.
+ * Extra stage height grows the wall, not more floor rows (keeps furniture gy aligned).
+ */
+export const FLOOR_DEPTH_CELLS = 7;
+/** Max fraction of stage height the floor band may use (short phones). */
+export const FLOOR_HEIGHT_MAX_RATIO = 0.55;
 /** @deprecated chunks no longer cap by CSS width; kept for callers. */
 export const CHUNK_MAX_DISPLAY_W = 390;
 /** Grid cells across one phone-ratio chunk (fixed, so layouts stay stable). */
 export const CHUNK_CELLS = 12;
+/** Base coin cost for the first expansion on a side. */
 export const ROOM_EXPAND_COST = 120;
 export const MAX_SIDE_EXPANSIONS = 2;
+
+/**
+ * Cost to buy the next chunk on one side. Doubles each time that side
+ * has already been expanded (120 → 240 → 480 …).
+ */
+export function expandCostForSide(expansionsOnSide: number): number {
+  const n = Math.max(0, Math.floor(expansionsOnSide));
+  return ROOM_EXPAND_COST * 2 ** n;
+}
+
+/** Sum paid for N expansions on one side (0→1→2… using progressive pricing). */
+export function totalExpansionCostForCount(count: number): number {
+  let total = 0;
+  for (let i = 0; i < Math.max(0, count); i += 1) {
+    total += expandCostForSide(i);
+  }
+  return total;
+}
+
+/** Cost to grow one side from `fromCount` up to (not including) `toCount`. */
+export function expansionCostFromTo(fromCount: number, toCount: number): number {
+  let total = 0;
+  for (let i = Math.max(0, fromCount); i < Math.max(0, toCount); i += 1) {
+    total += expandCostForSide(i);
+  }
+  return total;
+}
+
+export type ExpansionPurchase = {
+  side: "left" | "right";
+  /** 0-based index on that side when purchased. */
+  index: number;
+  cost: number;
+  byUserKey: string;
+};
+
+export function expansionPurchasesForRange(
+  side: "left" | "right",
+  fromCount: number,
+  toCount: number,
+  byUserKey: string,
+): ExpansionPurchase[] {
+  const out: ExpansionPurchase[] = [];
+  for (let i = Math.max(0, fromCount); i < Math.max(0, toCount); i += 1) {
+    out.push({
+      side,
+      index: i,
+      cost: expandCostForSide(i),
+      byUserKey,
+    });
+  }
+  return out;
+}
 
 export type FurnitureSprite =
   | "table"
@@ -69,7 +131,11 @@ export type FurnitureSprite =
   | "tvScreen0"
   | "tvScreen1"
   | "tvScreen2"
-  | "tvScreen3";
+  | "tvScreen3"
+  | "tvScreen4"
+  | "tvScreen5"
+  | "tvScreen6"
+  | "tvScreen7";
 
 export type FurnitureAnchor = "floor" | "wall";
 
@@ -84,6 +150,13 @@ export type PlacedFurniture = {
    */
   gy: number;
   anchor: FurnitureAnchor;
+  /** Whether furniture is still packed and needs to be unpacked via mini-game. */
+  packed?: boolean;
+  /**
+   * Active visual state (e.g. TV `off` / `channelA` / `channelB`).
+   * Undefined → catalog default / first sequence.
+   */
+  visualStateId?: string;
 };
 
 /** Sparse tile maps: key = `${gx},${gy}`. */
@@ -117,7 +190,35 @@ export type RoomDocument = {
   floorTiles: TileMap;
   /** Painted wall-panel cells above the floor seam (additive). */
   wallTiles: TileMap;
+  /** Who paid for each side expansion — used to refund coins on room reset. */
+  expansionPurchases?: ExpansionPurchase[];
 };
+
+/** Coins to refund a user for expansions they personally bought. */
+export function expansionRefundForUser(
+  doc: Pick<RoomDocument, "expansionPurchases">,
+  userKey: string,
+): number {
+  return (doc.expansionPurchases ?? [])
+    .filter((p) => p.byUserKey === userKey)
+    .reduce((sum, p) => sum + p.cost, 0);
+}
+
+/**
+ * Legacy rooms with no purchase log: estimate total expansion spend
+ * (refunded to the reset proposer only).
+ */
+export function estimatedExpansionRefund(
+  doc: Pick<RoomDocument, "expansionsLeft" | "expansionsRight" | "expansionPurchases">,
+): number {
+  if ((doc.expansionPurchases ?? []).length > 0) {
+    return (doc.expansionPurchases ?? []).reduce((sum, p) => sum + p.cost, 0);
+  }
+  return (
+    totalExpansionCostForCount(doc.expansionsLeft) +
+    totalExpansionCostForCount(doc.expansionsRight)
+  );
+}
 
 export type SpriteMeta = {
   id: FurnitureSprite;
@@ -130,6 +231,11 @@ export type SpriteMeta = {
   paintable: boolean;
   /** Can be used as a brush for floor/wall tile painting. */
   tileBrush: "floor" | "wall" | null;
+  /**
+   * Overlay-only art (e.g. TV screen frames) — not a free-standing placeable.
+   * Drawn on top of a parent furniture piece via visual states.
+   */
+  overlayFrame?: boolean;
 };
 
 export const SPRITE_CATALOG: SpriteMeta[] = [
@@ -245,7 +351,7 @@ export const SPRITE_CATALOG: SpriteMeta[] = [
   },
   {
     id: "chairDown",
-    label: "Chair ↓",
+    label: "Chair",
     source: FURNITURE.chairDown,
     nativeW: 16,
     nativeH: 20,
@@ -260,7 +366,8 @@ export const SPRITE_CATALOG: SpriteMeta[] = [
     nativeW: 16,
     nativeH: 20,
     defaultAnchor: "floor",
-    paintable: true,
+    // Rotation of Chair — pick via rotate chips, not as its own palette SKU.
+    paintable: false,
     tileBrush: null,
   },
   {
@@ -270,7 +377,7 @@ export const SPRITE_CATALOG: SpriteMeta[] = [
     nativeW: 16,
     nativeH: 20,
     defaultAnchor: "floor",
-    paintable: true,
+    paintable: false,
     tileBrush: null,
   },
   {
@@ -280,7 +387,7 @@ export const SPRITE_CATALOG: SpriteMeta[] = [
     nativeW: 14,
     nativeH: 16,
     defaultAnchor: "floor",
-    paintable: true,
+    paintable: false,
     tileBrush: null,
   },
   {
@@ -355,43 +462,91 @@ export const SPRITE_CATALOG: SpriteMeta[] = [
   },
   {
     id: "tvScreen0",
-    label: "TV screen A",
+    label: "TV screen A1",
     source: FURNITURE.tvScreen0,
     nativeW: 10,
     nativeH: 6,
     defaultAnchor: "wall",
-    paintable: true,
+    paintable: false,
     tileBrush: null,
+    overlayFrame: true,
   },
   {
     id: "tvScreen1",
-    label: "TV screen B",
+    label: "TV screen A2",
     source: FURNITURE.tvScreen1,
     nativeW: 10,
     nativeH: 6,
     defaultAnchor: "wall",
-    paintable: true,
+    paintable: false,
     tileBrush: null,
+    overlayFrame: true,
   },
   {
     id: "tvScreen2",
-    label: "TV screen C",
+    label: "TV screen A3",
     source: FURNITURE.tvScreen2,
     nativeW: 10,
     nativeH: 6,
     defaultAnchor: "wall",
-    paintable: true,
+    paintable: false,
     tileBrush: null,
+    overlayFrame: true,
   },
   {
     id: "tvScreen3",
-    label: "TV screen D",
+    label: "TV screen A4",
     source: FURNITURE.tvScreen3,
     nativeW: 10,
     nativeH: 6,
     defaultAnchor: "wall",
-    paintable: true,
+    paintable: false,
     tileBrush: null,
+    overlayFrame: true,
+  },
+  {
+    id: "tvScreen4",
+    label: "TV screen B1",
+    source: FURNITURE.tvScreen4,
+    nativeW: 10,
+    nativeH: 6,
+    defaultAnchor: "wall",
+    paintable: false,
+    tileBrush: null,
+    overlayFrame: true,
+  },
+  {
+    id: "tvScreen5",
+    label: "TV screen B2",
+    source: FURNITURE.tvScreen5,
+    nativeW: 10,
+    nativeH: 6,
+    defaultAnchor: "wall",
+    paintable: false,
+    tileBrush: null,
+    overlayFrame: true,
+  },
+  {
+    id: "tvScreen6",
+    label: "TV screen B3",
+    source: FURNITURE.tvScreen6,
+    nativeW: 10,
+    nativeH: 6,
+    defaultAnchor: "wall",
+    paintable: false,
+    tileBrush: null,
+    overlayFrame: true,
+  },
+  {
+    id: "tvScreen7",
+    label: "TV screen B4",
+    source: FURNITURE.tvScreen7,
+    nativeW: 10,
+    nativeH: 6,
+    defaultAnchor: "wall",
+    paintable: false,
+    tileBrush: null,
+    overlayFrame: true,
   },
   {
     id: "wallArt",
@@ -492,9 +647,15 @@ export function drawnSize(
 ): { w: number; h: number } {
   const meta = SPRITE_BY_ID[sprite];
   if (!meta) return { w: cellPx, h: cellPx };
+  // DevTools catalog overrides (spriteWidth/Height) apply live after save.
+  const { w: nativeW, h: nativeH } = effectiveNativeSize(
+    sprite,
+    meta.nativeW,
+    meta.nativeH,
+  );
   return {
-    w: (meta.nativeW / GRID_CELL) * cellPx,
-    h: (meta.nativeH / GRID_CELL) * cellPx,
+    w: (nativeW / GRID_CELL) * cellPx,
+    h: (nativeH / GRID_CELL) * cellPx,
   };
 }
 
@@ -548,6 +709,187 @@ export function expandRoomRight(doc: RoomDocument): RoomDocument {
   };
 }
 
+export type ShrinkRoomResult = {
+  document: RoomDocument;
+  removedFurniture: PlacedFurniture[];
+  removedWindows: PlacedWindow[];
+  /** Painted floor cells removed (only when not floorFill). */
+  removedFloorTiles: number;
+  removedWallTiles: number;
+  /** Coins to return for the removed expansion. */
+  refundCoins: number;
+};
+
+function furnitureWidthCells(sprite: FurnitureSprite): number {
+  const meta = SPRITE_BY_ID[sprite];
+  if (!meta) return 1;
+  const { w } = effectiveNativeSize(sprite, meta.nativeW, meta.nativeH);
+  return Math.max(0.01, w / GRID_CELL);
+}
+
+function furnitureOverlapsGxRange(
+  piece: PlacedFurniture,
+  minGx: number,
+  maxGxExclusive: number,
+): boolean {
+  const w = furnitureWidthCells(piece.sprite);
+  return piece.gx < maxGxExclusive && piece.gx + w > minGx;
+}
+
+function windowOverlapsGxRange(
+  win: PlacedWindow,
+  minGx: number,
+  maxGxExclusive: number,
+): boolean {
+  return win.gx < maxGxExclusive && win.gx + win.w > minGx;
+}
+
+function splitTileMapInRange(
+  map: TileMap,
+  minGx: number,
+  maxGxExclusive: number,
+): { kept: TileMap; removedCount: number } {
+  const kept: TileMap = {};
+  let removedCount = 0;
+  for (const key of Object.keys(map)) {
+    const { gx, gy } = parseTileKey(key);
+    if (gx >= minGx && gx < maxGxExclusive) {
+      removedCount += 1;
+    } else {
+      kept[tileKey(gx, gy)] = true;
+    }
+  }
+  return { kept, removedCount };
+}
+
+function popLastExpansionPurchase(
+  purchases: ExpansionPurchase[] | undefined,
+  side: "left" | "right",
+  index: number,
+): { remaining: ExpansionPurchase[]; refundCoins: number } {
+  const list = purchases ?? [];
+  // Prefer exact index match (newest last); fall back to last purchase on that side.
+  let removeAt = -1;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const entry = list[i];
+    if (entry && entry.side === side && entry.index === index) {
+      removeAt = i;
+      break;
+    }
+  }
+  if (removeAt < 0) {
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const entry = list[i];
+      if (entry && entry.side === side) {
+        removeAt = i;
+        break;
+      }
+    }
+  }
+  if (removeAt < 0) {
+    return {
+      remaining: list,
+      refundCoins: expandCostForSide(index),
+    };
+  }
+  const removed = list[removeAt];
+  const refundCoins = removed?.cost ?? expandCostForSide(index);
+  return {
+    remaining: [...list.slice(0, removeAt), ...list.slice(removeAt + 1)],
+    refundCoins,
+  };
+}
+
+/** Remove the outermost left expansion; contents in that strip are returned for inventory. */
+export function shrinkRoomLeft(doc: RoomDocument): ShrinkRoomResult | null {
+  if (doc.expansionsLeft <= 0) return null;
+  const minGx = 0;
+  const maxGx = CHUNK_CELLS;
+  const removedFurniture = doc.furniture.filter((p) =>
+    furnitureOverlapsGxRange(p, minGx, maxGx),
+  );
+  const keptFurniture = doc.furniture
+    .filter((p) => !furnitureOverlapsGxRange(p, minGx, maxGx))
+    .map((p) => ({ ...p, gx: p.gx - CHUNK_CELLS }));
+  const removedWindows = doc.windows.filter((w) =>
+    windowOverlapsGxRange(w, minGx, maxGx),
+  );
+  const keptWindows = doc.windows
+    .filter((w) => !windowOverlapsGxRange(w, minGx, maxGx))
+    .map((w) => ({ ...w, gx: w.gx - CHUNK_CELLS }));
+
+  const floorSplit = splitTileMapInRange(doc.floorTiles, minGx, maxGx);
+  const wallSplit = splitTileMapInRange(doc.wallTiles, minGx, maxGx);
+  const removedIndex = doc.expansionsLeft - 1;
+  const { remaining, refundCoins } = popLastExpansionPurchase(
+    doc.expansionPurchases,
+    "left",
+    removedIndex,
+  );
+
+  return {
+    document: {
+      ...doc,
+      expansionsLeft: doc.expansionsLeft - 1,
+      furniture: keptFurniture,
+      windows: keptWindows,
+      floorTiles: shiftTileMap(floorSplit.kept, -CHUNK_CELLS),
+      wallTiles: shiftTileMap(wallSplit.kept, -CHUNK_CELLS),
+      expansionPurchases: remaining,
+    },
+    removedFurniture,
+    removedWindows,
+    removedFloorTiles: doc.floorFill ? 0 : floorSplit.removedCount,
+    removedWallTiles: wallSplit.removedCount,
+    refundCoins,
+  };
+}
+
+/** Remove the outermost right expansion; contents in that strip are returned for inventory. */
+export function shrinkRoomRight(doc: RoomDocument): ShrinkRoomResult | null {
+  if (doc.expansionsRight <= 0) return null;
+  const minGx = (totalChunks(doc) - 1) * CHUNK_CELLS;
+  const maxGx = totalChunks(doc) * CHUNK_CELLS;
+  const removedFurniture = doc.furniture.filter((p) =>
+    furnitureOverlapsGxRange(p, minGx, maxGx),
+  );
+  const keptFurniture = doc.furniture.filter(
+    (p) => !furnitureOverlapsGxRange(p, minGx, maxGx),
+  );
+  const removedWindows = doc.windows.filter((w) =>
+    windowOverlapsGxRange(w, minGx, maxGx),
+  );
+  const keptWindows = doc.windows.filter(
+    (w) => !windowOverlapsGxRange(w, minGx, maxGx),
+  );
+
+  const floorSplit = splitTileMapInRange(doc.floorTiles, minGx, maxGx);
+  const wallSplit = splitTileMapInRange(doc.wallTiles, minGx, maxGx);
+  const removedIndex = doc.expansionsRight - 1;
+  const { remaining, refundCoins } = popLastExpansionPurchase(
+    doc.expansionPurchases,
+    "right",
+    removedIndex,
+  );
+
+  return {
+    document: {
+      ...doc,
+      expansionsRight: doc.expansionsRight - 1,
+      furniture: keptFurniture,
+      windows: keptWindows,
+      floorTiles: floorSplit.kept,
+      wallTiles: wallSplit.kept,
+      expansionPurchases: remaining,
+    },
+    removedFurniture,
+    removedWindows,
+    removedFloorTiles: doc.floorFill ? 0 : floorSplit.removedCount,
+    removedWallTiles: wallSplit.removedCount,
+    refundCoins,
+  };
+}
+
 let placeCounter = 0;
 
 export function createPlacementId(sprite: string): string {
@@ -581,6 +923,7 @@ export function createDefaultRoomDocument(): RoomDocument {
     floorFill: true,
     floorTiles: {},
     wallTiles: {},
+    expansionPurchases: [],
   };
 }
 
@@ -636,6 +979,9 @@ export function normalizeRoomDocument(value: unknown): RoomDocument {
         floorFill: v.floorFill ?? true,
         floorTiles: v.floorTiles ?? {},
         wallTiles: v.wallTiles ?? {},
+        expansionPurchases: Array.isArray(v.expansionPurchases)
+          ? v.expansionPurchases
+          : [],
       };
     }
   }

@@ -36,9 +36,10 @@ export type Appearance = {
   sheetId: string;
   hair: string;
   outfit: string;
-  /** Cozy pants variant: blue | purple | none */
+  /** Cozy pants variant: blue | none */
   pants: string;
   skin: string;
+  /** Hat / accessory layered over hair (e.g. "purple"). */
   accessory: string | null;
 };
 
@@ -60,6 +61,7 @@ export type ActionKind =
   | "sleep"
   | "walk"
   | "cook"
+  | "fry"
   | "clean"
   | "hug"
   | "kiss"
@@ -68,7 +70,9 @@ export type ActionKind =
   | "sit"
   | "dance"
   | "sing"
-  | "watch";
+  | "watch"
+  | "water"
+  | "makebed";
 
 export type RoomMemberState = {
   characterId: CharacterId;

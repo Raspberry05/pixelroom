@@ -80,7 +80,11 @@ class LocalSession implements MessagingSession {
   }
 }
 
-export class LocalCryptoProvider implements CryptoProvider {
+/**
+ * XOR-based local cipher for development/tests ONLY.
+ * Not secure against real adversaries — use NaclCryptoProvider for real E2EE.
+ */
+export class InsecureLocalCryptoProvider implements CryptoProvider {
   async generateIdentity(): Promise<IdentityBundle> {
     return {
       identityKey: generateKeyPair(),
@@ -97,6 +101,13 @@ export class LocalCryptoProvider implements CryptoProvider {
   }
 }
 
+/** @deprecated Prefer NaclCryptoProvider / createNaclCryptoProvider. */
+export class LocalCryptoProvider extends InsecureLocalCryptoProvider {}
+
 export function createLocalCryptoProvider(): CryptoProvider {
-  return new LocalCryptoProvider();
+  return new InsecureLocalCryptoProvider();
+}
+
+export function createInsecureLocalCryptoProvider(): CryptoProvider {
+  return new InsecureLocalCryptoProvider();
 }

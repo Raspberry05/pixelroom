@@ -1,12 +1,15 @@
 import {
   ACTION_COOLDOWN_MS,
   canStartAction,
+  isActionHeld,
   isLocationAction,
   isPromptOnlyAction,
   isSocialAction,
+  recentlyPlayerCommanded,
 } from "./actions.js";
 import { faceToward, findFreeSpotForAction, separateFromOthers, areNearForConversation } from "./hotspots.js";
 import { createId } from "./id.js";
+import type { SeatFacing, SolidBox } from "./layout.js";
 import { getMemberState, withMemberState } from "./room.js";
 import type {
   ActionKind,
@@ -14,12 +17,22 @@ import type {
   CharacterId,
   Room,
   RoomActionLogEntry,
+  RoomMemberState,
 } from "./types.js";
 
 export type PerformActionResult = {
   room: Room;
   logEntry: RoomActionLogEntry;
 };
+
+/** Map seat facing onto character L/R (sprites only flip horizontally). */
+function memberFacingFromSeat(
+  seatFacing: SeatFacing | undefined,
+  fallback: RoomMemberState["facing"],
+): RoomMemberState["facing"] {
+  if (seatFacing === "left" || seatFacing === "right") return seatFacing;
+  return fallback;
+}
 
 function resolveTargetId(
   room: Room,
@@ -43,42 +56,6 @@ function resolveTargetId(
   throw new Error(`no room member named "${targetName}"`);
 }
 
-function approachTarget(
-  room: Room,
-  actorId: CharacterId,
-  targetId: CharacterId,
-  now: number,
-): Room {
-  const target = getMemberState(room, targetId);
-  const actor = getMemberState(room, actorId);
-  const side = target.position.x >= actor.position.x ? -1 : 1;
-  const desired = separateFromOthers(room, actorId, {
-    x: target.position.x + side * 1.1,
-    y: target.position.y,
-  });
-  let next = withMemberState(
-    room,
-    actorId,
-    {
-      position: desired,
-      facing: faceToward({ ...actor, position: desired }, target),
-      occupiedSpotId: null,
-      currentAction: "walk",
-    },
-    now,
-  );
-  const updatedActor = getMemberState(next, actorId);
-  next = withMemberState(
-    next,
-    targetId,
-    {
-      facing: faceToward(target, updatedActor),
-    },
-    now,
-  );
-  return next;
-}
-
 /**
  * Apply a player or auto action to the room.
  * Location actions claim a free hotspot and walk there.
@@ -94,10 +71,13 @@ export function performAction(
     charactersById?: Map<CharacterId, Character>;
     source?: RoomActionLogEntry["source"];
     now?: number;
+    /** Solid furniture — walk/sit targets slide around these. */
+    solidBoxes?: SolidBox[];
   } = {},
 ): PerformActionResult {
   const now = options.now ?? Date.now();
   const source = options.source ?? "command";
+  const solids = options.solidBoxes ?? [];
   const actor = getMemberState(room, actorId);
 
   if (actor.presence !== "active" && source === "command") {
@@ -113,13 +93,20 @@ export function performAction(
     throw new Error(`already ${action}`);
   }
 
-  // Cooldowns apply to auto-sim only — user commands are never cooldown-gated.
-  if (
-    source === "auto" &&
-    ACTION_COOLDOWN_MS[action] > 0 &&
-    !canStartAction(actor, action, room.actionLog, now)
-  ) {
-    throw new Error(`${action} is on cooldown`);
+  // Auto must obey player commands and finish held actions before switching.
+  if (source === "auto") {
+    if (recentlyPlayerCommanded(room.actionLog, String(actorId), now)) {
+      throw new Error("obeying player command");
+    }
+    if (isActionHeld(actor, room.actionLog, now)) {
+      throw new Error(`still ${actor.currentAction}`);
+    }
+    if (
+      ACTION_COOLDOWN_MS[action] > 0 &&
+      !canStartAction(actor, action, room.actionLog, now)
+    ) {
+      throw new Error(`${action} is on cooldown`);
+    }
   }
 
   let targetId =
@@ -150,47 +137,106 @@ export function performAction(
   if (isLocationAction(action)) {
     const spot = findFreeSpotForAction(next, action, actorId);
     if (!spot) {
-      throw new Error(`no free ${action} spot in this room`);
+      // Sit: if no chair/floor hotspot is free, just sit where you are.
+      if (action === "sit") {
+        const pos = separateFromOthers(
+          next,
+          actorId,
+          actor.position,
+          0.85,
+          undefined,
+          solids,
+        );
+        next = withMemberState(
+          next,
+          actorId,
+          {
+            position: pos,
+            currentAction: "sit",
+            occupiedSpotId: null,
+            actionTargetId: null,
+            presence: "active",
+            lastActiveAt: now,
+          },
+          now,
+        );
+      } else {
+        throw new Error(`no free ${action} spot in this room`);
+      }
+    } else {
+      spotId = spot.id;
+      const pos = separateFromOthers(
+        next,
+        actorId,
+        spot.position,
+        0.85,
+        undefined,
+        solids,
+      );
+      next = withMemberState(
+        next,
+        actorId,
+        {
+          position: pos,
+          currentAction: "walk",
+          occupiedSpotId: null,
+          actionTargetId: null,
+        },
+        now,
+      );
+      next = withMemberState(
+        next,
+        actorId,
+        {
+          position: pos,
+          currentAction: action,
+          occupiedSpotId: spot.id,
+          actionTargetId: null,
+          presence: "active",
+          lastActiveAt: now,
+          ...(action === "sit"
+            ? {
+                facing: memberFacingFromSeat(spot.facing, actor.facing),
+              }
+            : {}),
+        },
+        now,
+      );
     }
-    spotId = spot.id;
-    const pos = separateFromOthers(next, actorId, spot.position);
-    next = withMemberState(
-      next,
-      actorId,
-      {
-        position: pos,
-        currentAction: "walk",
-        occupiedSpotId: null,
-        actionTargetId: null,
-      },
-      now,
-    );
-    next = withMemberState(
-      next,
-      actorId,
-      {
-        position: pos,
-        currentAction: action,
-        occupiedSpotId: spot.id,
-        actionTargetId: null,
-        presence: "active",
-        lastActiveAt: now,
-      },
-      now,
-    );
   } else {
     if (targetId && isSocialAction(action)) {
       const target = getMemberState(next, targetId);
       // Far-apart characters keep their own scroll/camera positions —
       // never rush across the room just to socialize.
       if (areNearForConversation(actor, target)) {
-        next = approachTarget(next, actorId, targetId, now);
+        // Face only — never teleport/approach on the server. Closing the gap
+        // is per-client: each device walks its own character toward peers that
+        // are actually visible on that screen (phone vs iPad viewports differ).
+        next = withMemberState(
+          next,
+          actorId,
+          { facing: faceToward(actor, target) },
+          now,
+        );
+        next = withMemberState(
+          next,
+          targetId,
+          { facing: faceToward(target, actor) },
+          now,
+        );
       } else if (source === "auto") {
         throw new Error("targets too far apart for auto social");
       }
     } else if (!isSocialAction(action)) {
       // dance / sing / watch in place but nudged off others
-      const pos = separateFromOthers(next, actorId, actor.position);
+      const pos = separateFromOthers(
+        next,
+        actorId,
+        actor.position,
+        0.85,
+        undefined,
+        solids,
+      );
       next = withMemberState(
         next,
         actorId,

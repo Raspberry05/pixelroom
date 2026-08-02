@@ -16,12 +16,14 @@ function cozyLayerRows(appearance: Appearance): number[] {
   if (appearance.hair !== "bald" && appearance.hair !== "none") {
     rows.push(COZY_SHEET.rows.hair);
   }
+  // Hat layers on top of hair.
+  if (appearance.accessory === "purple") {
+    rows.push(COZY_SHEET.rows.hat);
+  }
   if (appearance.outfit !== "none") {
     rows.push(COZY_SHEET.rows.shirt);
   }
-  if (appearance.pants === "purple") {
-    rows.push(COZY_SHEET.rows.pantsPurple);
-  } else if (appearance.pants !== "none") {
+  if (appearance.pants !== "none" && appearance.pants !== "purple") {
     rows.push(COZY_SHEET.rows.pantsBlue);
   }
   rows.push(COZY_SHEET.rows.shoes);
@@ -55,7 +57,7 @@ export function AvatarSprite({ appearance, member, size }: Props) {
   const kit = appearance.kit === "sheet" ? "sheet" : "cozy";
 
   if (kit === "sheet") {
-    const scale = Math.max(2, Math.round(size / SHEET_SIZE.frameH));
+    const scale = Math.max(1, size / SHEET_SIZE.frameH);
     const row = sheetDirRow(facing);
     const col = moving ? frame % SHEET_SIZE.cols : 0;
     return (
@@ -63,8 +65,8 @@ export function AvatarSprite({ appearance, member, size }: Props) {
         style={[
           styles.box,
           {
-            width: SHEET_SIZE.frameW * scale,
-            height: SHEET_SIZE.frameH * scale,
+            width: size,
+            height: size,
           },
         ]}
       >
@@ -84,13 +86,12 @@ export function AvatarSprite({ appearance, member, size }: Props) {
     );
   }
 
-  const scale = Math.max(2, Math.round(size / COZY_SHEET.frame));
+  const scale = Math.max(1, size / COZY_SHEET.frame);
   const faceOffset = facing === "left" ? 1 : 0;
   const layers = cozyLayerRows(appearance);
-  const px = COZY_SHEET.frame * scale;
 
   return (
-    <View style={[styles.box, { width: px, height: px }]}>
+    <View style={[styles.box, { width: size, height: size }]}>
       {layers.map((baseRow) => (
         <View key={baseRow} style={styles.layer}>
           <SpriteFrame
@@ -115,9 +116,12 @@ export function AvatarSprite({ appearance, member, size }: Props) {
 export function AvatarPreview({
   appearance,
   size = 96,
+  /** When true, keep the requested size (PFPs). Default snaps to sprite grid. */
+  exactSize = false,
 }: {
   appearance: Appearance;
   size?: number;
+  exactSize?: boolean;
 }) {
   const idleMember: RoomMemberState = {
     characterId: asCharacterId("preview"),
@@ -129,7 +133,12 @@ export function AvatarPreview({
     occupiedSpotId: null,
     lastActiveAt: 0,
   };
-  return <AvatarSprite appearance={appearance} member={idleMember} size={Math.max(64, Math.round(size / 32) * 32)} />;
+  const drawSize = exactSize
+    ? Math.max(32, Math.round(size))
+    : Math.max(64, Math.round(size / 32) * 32);
+  return (
+    <AvatarSprite appearance={appearance} member={idleMember} size={drawSize} />
+  );
 }
 
 const styles = StyleSheet.create({

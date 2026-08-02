@@ -1,9 +1,11 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { PixelImage } from "../PixelImage";
+import { CatalogArt } from "../AtlasSprite";
 import {
+  CHAIR_ROTATIONS,
   getQty,
   inventoryIdForSprite,
   inventoryIdForTile,
+  isChairSprite,
   type InventoryState,
 } from "../../data/inventory";
 import {
@@ -14,7 +16,15 @@ import {
   type FurnitureSprite,
   type RoomDocument,
 } from "../../data/roomLayout";
+import { cropOverride } from "../../data/spriteOverrides";
 import { colors, radii, space } from "../../theme";
+
+const CHAIR_ROT_LABEL: Record<string, string> = {
+  chairDown: "↓",
+  chairLeft: "←",
+  chairRight: "→",
+  chairUp: "↑",
+};
 
 type Props = {
   tool: EditTool;
@@ -23,6 +33,7 @@ type Props = {
   hasSelection: boolean;
   onResetLayout: () => void;
   onToggleFloorFill: () => void;
+  onImportLayout?: () => void;
   document: RoomDocument;
   inventory: InventoryState;
   savedLabel: string;
@@ -39,12 +50,15 @@ export function RoomPalette({
   hasSelection,
   onResetLayout,
   onToggleFloorFill,
+  onImportLayout,
   document,
   inventory,
   savedLabel,
   status,
 }: Props) {
   const furniture = SPRITE_CATALOG.filter((s) => s.paintable && s.tileBrush == null);
+  const chairToolActive =
+    tool.kind === "paint" && isChairSprite(tool.sprite);
 
   return (
     <View style={styles.wrap}>
@@ -76,6 +90,13 @@ export function RoomPalette({
           onPress={onToggleFloorFill}
         />
         <ToolChip label="Reset" active={false} onPress={onResetLayout} />
+        {onImportLayout ? (
+          <ToolChip
+            label="Import/Export"
+            active={false}
+            onPress={onImportLayout}
+          />
+        ) : null}
         <Text style={styles.saved}>{savedLabel}</Text>
       </View>
 
@@ -83,7 +104,9 @@ export function RoomPalette({
 
       <Text style={styles.hint}>
         {tool.kind === "paint"
-          ? `Selected ${SPRITE_BY_ID[tool.sprite]?.label ?? tool.sprite} — tap the ${SPRITE_BY_ID[tool.sprite]?.defaultAnchor ?? "room"} to place`
+          ? isChairSprite(tool.sprite)
+            ? "Chair — pick facing below, then tap the floor to place"
+            : `Selected ${SPRITE_BY_ID[tool.sprite]?.label ?? tool.sprite} — tap the ${SPRITE_BY_ID[tool.sprite]?.defaultAnchor ?? "room"} to place`
           : tool.kind === "tile"
             ? `Paint ${tool.surface} only — tap/drag on the ${tool.surface}`
             : tool.kind === "window"
@@ -93,12 +116,30 @@ export function RoomPalette({
                 : "Move: drag pieces · pick furniture below, then tap where to place"}
       </Text>
 
-      <ScrollView
-        style={styles.bodyScroll}
-        contentContainerStyle={styles.bodyContent}
-        nestedScrollEnabled
-        keyboardShouldPersistTaps="handled"
-      >
+      {chairToolActive ? (
+        <View style={styles.rotRow}>
+          <Text style={styles.rotLabel}>Facing</Text>
+          {CHAIR_ROTATIONS.map((sprite) => {
+            const active = tool.kind === "paint" && tool.sprite === sprite;
+            return (
+              <Pressable
+                key={sprite}
+                style={[styles.rotChip, active && styles.rotChipOn]}
+                onPress={() => onChangeTool({ kind: "paint", sprite })}
+                accessibilityLabel={`Chair facing ${CHAIR_ROT_LABEL[sprite]}`}
+              >
+                <Text style={styles.rotChipText}>{CHAIR_ROT_LABEL[sprite]}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {/*
+        Horizontal rows only — a vertical ScrollView with maxHeight was
+        reserving a tall empty band under the swatches in edit mode.
+      */}
+      <View style={styles.body}>
         <Text style={styles.section}>Tiles (inventory)</Text>
         <ScrollView
           horizontal
@@ -125,10 +166,14 @@ export function RoomPalette({
                 }
               >
                 <View style={styles.swatchArt}>
-                  <PixelImage
-                    source={meta.source}
+                  <CatalogArt
+                    crop={cropOverride(sprite)}
+                    fallbackSource={meta.source}
                     width={Math.min(PREVIEW, meta.nativeW * WORLD_SCALE)}
-                    height={Math.min(PREVIEW, Math.min(meta.nativeH, 16) * WORLD_SCALE)}
+                    height={Math.min(
+                      PREVIEW,
+                      Math.min(meta.nativeH, 16) * WORLD_SCALE,
+                    )}
                   />
                 </View>
                 <Text style={styles.swatchLabel} numberOfLines={1}>
@@ -150,21 +195,27 @@ export function RoomPalette({
           {furniture.map((sprite) => {
             const invId = inventoryIdForSprite(sprite.id);
             const qty = invId ? getQty(inventory, invId) : 0;
-            const active = tool.kind === "paint" && tool.sprite === sprite.id;
+            const active =
+              tool.kind === "paint" &&
+              (tool.sprite === sprite.id ||
+                (isChairSprite(sprite.id) && isChairSprite(tool.sprite)));
             return (
               <Pressable
                 key={sprite.id}
                 style={[styles.swatch, active && styles.swatchOn, qty <= 0 && styles.swatchEmpty]}
                 onPress={() =>
                   onChangeTool(
-                    active ? { kind: "move" } : { kind: "paint", sprite: sprite.id },
+                    active && tool.kind === "paint" && tool.sprite === sprite.id
+                      ? { kind: "move" }
+                      : { kind: "paint", sprite: sprite.id },
                   )
                 }
                 accessibilityLabel={`${sprite.label} ${qty}`}
               >
                 <View style={styles.swatchArt}>
-                  <PixelImage
-                    source={sprite.source}
+                  <CatalogArt
+                    crop={cropOverride(sprite.id)}
+                    fallbackSource={sprite.source}
                     width={Math.min(PREVIEW, sprite.nativeW * WORLD_SCALE)}
                     height={Math.min(PREVIEW, sprite.nativeH * WORLD_SCALE)}
                   />
@@ -176,7 +227,7 @@ export function RoomPalette({
             );
           })}
         </ScrollView>
-      </ScrollView>
+      </View>
     </View>
   );
 }
@@ -211,7 +262,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: radii.xl,
     backgroundColor: colors.surface,
     paddingTop: space.sm,
-    maxHeight: "42%",
+    paddingBottom: space.sm,
   },
   tools: {
     flexDirection: "row",
@@ -238,27 +289,55 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     fontSize: 11,
     color: colors.inkMuted,
-    marginBottom: space.sm,
+    marginBottom: space.xs,
   },
-  bodyScroll: {
-    flexGrow: 0,
-    maxHeight: 200,
+  rotRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    marginBottom: space.xs,
   },
-  bodyContent: {
-    paddingBottom: space.md,
-    gap: space.xs,
+  rotLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.inkMuted,
+    textTransform: "uppercase",
+  },
+  rotChip: {
+    minWidth: 36,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
+    paddingHorizontal: 8,
+  },
+  rotChipOn: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.accent,
+  },
+  rotChipText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.ink,
+  },
+  body: {
+    gap: 2,
+    paddingBottom: space.xs,
   },
   section: {
     paddingHorizontal: space.md,
-    paddingTop: space.sm,
-    paddingBottom: 4,
+    paddingTop: space.xs,
+    paddingBottom: 2,
     fontSize: 10,
     fontWeight: "700",
     color: colors.inkMuted,
     textTransform: "uppercase",
   },
   rowScroll: {
-    minHeight: SWATCH_H + 8,
+    flexGrow: 0,
   },
   palette: {
     paddingHorizontal: space.md,
